@@ -1,0 +1,17 @@
+# --- Model Configuration ---
+model:
+  name: "SimpleCNN"        # A name for the model architecture
+  num_classes: 10          # Number of output classes (CIFAR-10 has 10)
+
+# --- Training Configuration ---
+training:
+  device: "cuda"           # Device to use: "cuda" or "cpu"
+  optimizer: "Adam"        # Optimizer: "Adam" or "SGD"
+  learning_rate: 0.001     # Initial learning rate
+  weight_decay: 0.0001     # Weight decay for regularization
+  num_epochs: 25           # Total number of training epochs
+
+# --- Logging and Saving ---
+logging:
+  log_interval: 100        # Print training status every N batches
+  checkpoint_dir: "./checkpoints" # Directory to save model checkpoints
