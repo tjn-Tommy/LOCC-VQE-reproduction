@@ -19,7 +19,7 @@ class BatchedVQE:
         self.params = torch.tensor(
             initial_params_batch,
             requires_grad=True,
-            dtype=torch.float64,
+            dtype=torch.float32,
             device=self.device,
         )
 
@@ -41,7 +41,7 @@ class BatchedVQE:
             total_cost.backward()
             self.optimizer.step()
 
-            if verbose and (i + 1) % 20 == 0:
+            if verbose and (i + 1) % 1 == 0:
                 avg_cost = cost_batch.mean().item()
                 print(f"Iteration {i + 1:5d} | Average Cost: {avg_cost:.8f}")
 

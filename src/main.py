@@ -42,7 +42,7 @@ def main(config_path="./configs/config.yaml"):
     print("Configuring Qiskit backend...")
     aer_sim = AerSimulator(method='statevector', device='GPU' if use_cuda else 'CPU')
     estimator = BackendEstimatorV2(backend=aer_sim)
-    qnn = qnn_wrapper(circuit, [hamiltonian], estimator)
+    qnn = qnn_wrapper(circuit, [hamiltonian], estimator).to(device)
 
     # Wrapper function for the cost
     def cost_function(params_batch):
@@ -56,7 +56,7 @@ def main(config_path="./configs/config.yaml"):
             # 1. Update the internal weights of the QNN object.
             #    qnn.weight is the nn.Parameter tensor managed by TorchConnector.
             #    We update its content with the parameters from our optimizer.
-            qnn.weight.data = params
+            qnn.weight.data = params.to(device, dtype=qnn.weight.dtype)
 
             # 2. Call the forward pass with no input data, which is correct for VQE.
             #    The QNN will use its now-updated internal weights to compute the energy.
