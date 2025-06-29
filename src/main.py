@@ -2,7 +2,7 @@ import yaml
 import numpy as np
 import torch
 from qiskit.circuit import ParameterVector
-
+from qiskit_machine_learning.gradients import ParamShiftEstimatorGradient
 # Qiskit imports
 from qiskit_aer import AerSimulator
 from qiskit.primitives import BackendEstimatorV2
@@ -40,31 +40,63 @@ def main(config_path="./configs/config.yaml"):
 
     # 3. Configure Backend and Bridge to PyTorch
     print("Configuring Qiskit backend...")
-    aer_sim = AerSimulator(method='statevector', device='GPU' if use_cuda else 'CPU')
-    estimator = BackendEstimatorV2(backend=aer_sim)
+    aer_sim = AerSimulator(method='statevector',
+                           device='GPU' if use_cuda else 'CPU',
+                           cuStateVec_enable=True,
+                           blocking_enable=True,
+                           )
+    estimator = BackendEstimatorV2(backend=aer_sim,)
     qnn = qnn_wrapper(circuit, [hamiltonian], estimator).to(device)
-
+    init_theta = torch.rand(num_ansatz_params, device=device) * (2 * np.pi)
+    qnn.weight = torch.nn.Parameter(init_theta, requires_grad=True)
     # Wrapper function for the cost
-    def cost_function(params_batch):
-        """
-        Computes the cost for a batch of parameters. It manually updates the QNN's
-        internal weights for each instance in the batch and then calls the
-        forward pass without any input data.
-        """
-        cost_list = []
-        for params in params_batch:
-            # 1. Update the internal weights of the QNN object.
-            #    qnn.weight is the nn.Parameter tensor managed by TorchConnector.
-            #    We update its content with the parameters from our optimizer.
-            qnn.weight.data = params.to(device, dtype=qnn.weight.dtype)
+    grad_estimator = ParamShiftEstimatorGradient(estimator)
 
-            # 2. Call the forward pass with no input data, which is correct for VQE.
-            #    The QNN will use its now-updated internal weights to compute the energy.
-            cost = qnn()
-            cost_list.append(cost)
+    class EstimatorLayer(torch.autograd.Function):
+        """
+        A differentiable wrapper around Qiskit EstimatorV2 + ParamShiftEstimatorGradient.
+        Forward:  expectation values  ⟨ψ(θ)| H |ψ(θ)⟩
+        Backward: analytic parameter-shift gradient  d/dθ ⟨ψ(θ)| H |ψ(θ)⟩
+        """
 
-        # 3. Stack the individual costs back into a single tensor for the optimizer.
-        return torch.cat(cost_list).reshape(-1)
+        @staticmethod
+        def forward(ctx, params_batch: torch.Tensor) -> torch.Tensor:
+            # 1.  Launch the batched Estimator job ---------------------------
+
+            theta_list = params_batch.detach().cpu().numpy().tolist()
+            pubs = [(circuit, hamiltonian, p.detach().cpu().numpy()) for p in params_batch]
+            ev_job = estimator.run(pubs=pubs)
+
+            evs_np   = [r.data.evs for r in ev_job.result()]   # shape (B,)
+            vals = [a.item() for a in evs_np]
+            # 2.  Save inputs for the backward pass --------------------------
+            ctx.save_for_backward(params_batch)  # we need the *values*
+            ctx.theta_list = theta_list  # gradient interface is NumPy
+
+            return torch.tensor(vals,
+                                device=params_batch.device,
+                                dtype=params_batch.dtype)
+
+        @staticmethod
+        def backward(ctx, grad_output: torch.Tensor):
+            (params_batch,) = ctx.saved_tensors
+
+            # 1.  Compute analytic gradients via parameter-shift ------------
+            circuits = [circuit] * len(ctx.theta_list)
+            observables = [hamiltonian] * len(ctx.theta_list)
+            grad_job = grad_estimator.run(circuits, observables, ctx.theta_list)
+            grads_np = grad_job.result().gradients  # (B, n_params)
+
+            grads = torch.tensor(grads_np,
+                                 device=params_batch.device,
+                                 dtype=params_batch.dtype)
+
+            # 2.  Chain rule: dL/dθ = dL/dE · dE/dθ -------------------------
+            return grad_output.unsqueeze(1) * grads  # same shape as params_batch
+
+    def cost_function(params_batch: torch.Tensor) -> torch.Tensor:
+        return EstimatorLayer.apply(params_batch)
+
 
     # 4. Prepare and Configure the Trainer
     print("Configuring the trainer...")
@@ -86,7 +118,6 @@ def main(config_path="./configs/config.yaml"):
     batched_vqe_solver.analyze_results(exact_energy=exact_energy)
 
     print(f"--- Experiment '{exp_name}' Finished ---")
-
 
 if __name__ == "__main__":
     main()

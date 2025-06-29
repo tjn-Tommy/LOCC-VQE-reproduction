@@ -2,10 +2,10 @@
 
 experiment_setup:
   name: "2Qubit_Ising_HardwareEfficient_GPU_Run"
-  num_runs: 10
+  num_runs: 1
 
 quantum_model:
-  num_qubits: 2
+  num_qubits: 8
 
 backend_options:
   device: "cuda"
