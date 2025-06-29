@@ -1,0 +1,8 @@
+qiskit
+qiskit-aer-gpu
+qiskit-machine-learning
+torch
+numpy
+scipy
+matplotlib
+PyYAML

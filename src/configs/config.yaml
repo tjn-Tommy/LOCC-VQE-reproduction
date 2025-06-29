@@ -1,17 +1,20 @@
-# --- Model Configuration ---
-model:
-  name: "SimpleCNN"        # A name for the model architecture
-  num_classes: 10          # Number of output classes (CIFAR-10 has 10)
+# Configuration for the VQE experiment
 
-# --- Training Configuration ---
-training:
-  device: "cuda"           # Device to use: "cuda" or "cpu"
-  optimizer: "Adam"        # Optimizer: "Adam" or "SGD"
-  learning_rate: 0.001     # Initial learning rate
-  weight_decay: 0.0001     # Weight decay for regularization
-  num_epochs: 25           # Total number of training epochs
+experiment_setup:
+  name: "2Qubit_Ising_HardwareEfficient_GPU_Run"
+  num_runs: 1
 
-# --- Logging and Saving ---
-logging:
-  log_interval: 100        # Print training status every N batches
-  checkpoint_dir: "./checkpoints" # Directory to save model checkpoints
+quantum_model:
+  num_qubits: 2
+
+backend_options:
+  device: "cuda"
+
+optimizer_params:
+  name: "Adam"
+  learning_rate: 0.1
+  iterations: 100
+
+analysis_params:
+  exact_energy: -1.5
+

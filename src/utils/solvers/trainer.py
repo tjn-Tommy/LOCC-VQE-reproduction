@@ -1,109 +1,96 @@
 import torch
-import torch.nn as nn
-import torch.optim as optim
-import torchvision
-import torchvision.transforms as transforms
-from torch.utils.data import DataLoader
-
-import yaml
-import argparse
-import logging
-from pathlib import Path
-import time
-
-# --- Setup Logging ---
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-# --- The Trainer Class ---
-import torch
 import numpy as np
 import time
 import matplotlib.pyplot as plt
 
 
-class PyTorchVQE:
+class BatchedVQE:
     """
-    A class to run the Variational Quantum Eigensolver (VQE) using PyTorch.
-
-    This class abstracts the optimization loop, allowing it to be used with any
-    differentiable quantum cost function (e.g., from PennyLane or Qiskit's TorchConnector).
+    A class to run multiple VQE instances in parallel using PyTorch batching,
+    configurable for CPU or GPU execution.
     """
 
-    def __init__(self, cost_function, initial_params, optimizer_name='Adam', learning_rate=0.1):
-        """
-        Initializes the VQE solver.
-
-        Args:
-            cost_function (callable): A function that takes a PyTorch tensor of
-                parameters and returns a scalar loss (expectation value).
-                This function must be differentiable with respect to its input.
-            initial_params (np.ndarray or list): The starting parameters for the VQE ansatz.
-            optimizer_name (str): The name of the PyTorch optimizer to use.
-                Supported: 'Adam', 'SGD', 'RMSprop'.
-            learning_rate (float): The learning rate for the optimizer.
-        """
-        if not callable(cost_function):
-            raise TypeError("cost_function must be a callable function.")
+    def __init__(self, cost_function, initial_params_batch, optimizer_name='Adam', learning_rate=0.1, device='cpu'):
+        self.batch_size = initial_params_batch.shape[0]
+        self.num_params = initial_params_batch.shape[1]
+        self.device = device
 
         self.cost_function = cost_function
-        self.params = torch.tensor(initial_params, requires_grad=True, dtype=torch.float64)
+        self.params = torch.tensor(
+            initial_params_batch,
+            requires_grad=True,
+            dtype=torch.float64,
+            device=self.device,
+        )
 
-        self.learning_rate = learning_rate
-        if optimizer_name.lower() == 'adam':
-            self.optimizer = torch.optim.Adam([self.params], lr=self.learning_rate)
-        elif optimizer_name.lower() == 'sgd':
-            self.optimizer = torch.optim.SGD([self.params], lr=self.learning_rate)
-        elif optimizer_name.lower() == 'rmsprop':
-            self.optimizer = torch.optim.RMSprop([self.params], lr=self.learning_rate)
-        else:
-            raise ValueError(f"Optimizer '{optimizer_name}' not supported.")
+        optimizer_class = getattr(torch.optim, optimizer_name)
+        self.optimizer = optimizer_class([self.params], lr=learning_rate)
 
-        self.history = {'cost': []}
-        self.final_energy = None
-        self.optimal_params = None
+        self.history = {'cost': [[] for _ in range(self.batch_size)]}
+        self.final_energies = None
 
-    def optimize(self, iterations, verbose=True):
-        """
-        Runs the VQE optimization loop.
-        """
-        print("Starting PyTorch VQE optimization with Qiskit backend...")
+    def optimize(self, iterations, verbose=False):
+        """Runs the batched VQE optimization loop."""
+        print(f"Starting batched VQE optimization on device: '{self.device}' for {self.batch_size} instances...")
         start_time = time.time()
 
         for i in range(iterations):
             self.optimizer.zero_grad()
-            cost = self.cost_function(self.params)
-            cost.backward()
+            cost_batch = self.cost_function(self.params)
+            total_cost = cost_batch.sum()
+            total_cost.backward()
             self.optimizer.step()
 
-            cost_val = cost.item()
-            self.history['cost'].append(cost_val)
+            if verbose and (i + 1) % 20 == 0:
+                avg_cost = cost_batch.mean().item()
+                print(f"Iteration {i + 1:5d} | Average Cost: {avg_cost:.8f}")
 
-            if verbose and (i + 1) % 10 == 0:
-                print(f"Iteration {i + 1:5d} | Cost: {cost_val:.8f}")
+            for b in range(self.batch_size):
+                self.history['cost'][b].append(cost_batch[b].item())
 
         end_time = time.time()
         print(f"\nOptimization finished in {end_time - start_time:.2f} seconds.")
 
-        self.final_energy = self.history['cost'][-1]
-        self.optimal_params = self.params.detach().numpy()
+        self.final_energies = self.params.grad.new_tensor([run_history[-1] for run_history in self.history['cost']])
+        return self.final_energies
 
-        print(f"Final Energy (Expectation Value): {self.final_energy:.8f}")
-
-        return {'fun': self.final_energy, 'x': self.optimal_params}
-
-    def plot_history(self):
-        """
-        Plots the cost history of the optimization.
-        """
-        if not self.history['cost']:
-            print("No optimization history to plot. Please run optimize() first.")
+    def analyze_results(self, exact_energy=None):
+        """Calculates and prints statistics of the final energies."""
+        if self.final_energies is None:
+            print("Please run optimize() first.")
             return
 
-        plt.figure(figsize=(10, 6))
-        plt.plot(self.history['cost'], label='Cost (Energy)')
-        plt.xlabel("Iteration")
-        plt.ylabel("Expectation Value")
-        plt.title("VQE Optimization History (Qiskit + PyTorch)")
-        plt.grid(True)
+        # Move data to CPU for analysis with NumPy and Matplotlib
+        final_energies_cpu = self.final_energies.cpu().detach().numpy()
+
+        mean_energy = np.mean(final_energies_cpu)
+        std_energy = np.std(final_energies_cpu)
+        min_energy = np.min(final_energies_cpu)
+        max_energy = np.max(final_energies_cpu)
+
+        print("\n--- VQE Performance Analysis ---")
+        print(f"Number of parallel runs: {self.batch_size}")
+        print(f"Best energy found:       {min_energy:.8f}")
+        print(f"Worst energy found:      {max_energy:.8f}")
+        print(f"Average final energy:    {mean_energy:.8f}")
+        print(f"Std. Dev. of energies:   {std_energy:.8f}")
+
+        if exact_energy is not None:
+            print("----------------------------------")
+            print(f"Exact ground state energy: {exact_energy:.8f}")
+            print(f"Error of best result:    {abs(min_energy - exact_energy):.8f}")
+
+        plt.figure(figsize=(12, 6))
+        plt.hist(final_energies_cpu, bins=15, alpha=0.75, label='Final Energy Distribution')
+        plt.axvline(mean_energy, color='red', linestyle='dashed', linewidth=2, label=f'Mean: {mean_energy:.4f}')
+        plt.axvline(min_energy, color='green', linestyle='dashed', linewidth=2, label=f'Best: {min_energy:.4f}')
+        if exact_energy is not None:
+            plt.axvline(exact_energy, color='black', linestyle='solid', linewidth=2, label=f'Exact: {exact_energy:.4f}')
+
+        plt.title('Distribution of Final Energies from Batched VQE Runs')
+        plt.xlabel('Final Energy')
+        plt.ylabel('Frequency')
         plt.legend()
+        plt.grid(axis='y', alpha=0.5)
         plt.show()
+

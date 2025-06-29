@@ -22,7 +22,7 @@ def hamiltonian_GHZ(n: int, global_coeff: float, perturb: float = 0.0) -> Sparse
     # Coefficient is -(1-h)/n
     coeff_zz = -(1 - perturb) / n
     for i in range(n - 1):
-        zz_pauli = ['I'] * n
+        zz_pauli = ['I'] * 2 * n
         zz_pauli[n - 1 - i] = 'Z'
         zz_pauli[n - 1 - (i + 1)] = 'Z'
         pauli_list.append("".join(zz_pauli))
@@ -31,14 +31,14 @@ def hamiltonian_GHZ(n: int, global_coeff: float, perturb: float = 0.0) -> Sparse
     # 2. Global X...X term
     # Coefficient is -(kx-h)/n
     coeff_x = -(global_coeff - perturb) / n
-    pauli_list.append('X' * n)
+    pauli_list.append('X' * n + 'I' * n)  # Global X term on first n qubits
     coeff_list.append(coeff_x)
 
     # 3. Single Z terms
     # Coefficient is -h/n
     coeff_z = -perturb / n
     for i in range(n):
-        z_pauli = ['I'] * n
+        z_pauli = ['I'] * n + ['I'] * n  # Z terms on first n qubits
         z_pauli[n - 1 - i] = 'Z'
         pauli_list.append("".join(z_pauli))
         coeff_list.append(coeff_z)
