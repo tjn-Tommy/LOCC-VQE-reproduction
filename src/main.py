@@ -34,9 +34,13 @@ def main(config_path="./configs/config.yaml"):
     num_ansatz_params = get_num_ghz_params(num_qubits)
     params_vec = ParameterVector('θ', length=num_ansatz_params)
     circuit = GHZ_circuit(num_qubits, params_vec)
-    hamiltonian = hamiltonian_GHZ(num_qubits, 0.2, 0.1)
+    hamiltonian = hamiltonian_GHZ(num_qubits, 16, 0.2)
+    reduced_hamiltonian = reduced_hamiltonian_GHZ(num_qubits, 16, 0.2)
     print(f"Loaded Ansatz with {num_ansatz_params} parameters.")
     print(f"Loaded Hamiltonian: '{hamiltonian.to_list()}'")
+
+    exact_energy = ground_truth_solver(reduced_hamiltonian)
+    print(f"Exact ground state energy: {exact_energy:.6f}")
 
     # 3. Configure Backend and Bridge to PyTorch
     print("Configuring Qiskit backend...")
@@ -86,8 +90,8 @@ def main(config_path="./configs/config.yaml"):
             observables = [hamiltonian] * len(ctx.theta_list)
             grad_job = grad_estimator.run(circuits, observables, ctx.theta_list)
             grads_np = grad_job.result().gradients  # (B, n_params)
-
-            grads = torch.tensor(grads_np,
+            stacked_grads_np = np.array(grads_np)
+            grads = torch.tensor(stacked_grads_np,
                                  device=params_batch.device,
                                  dtype=params_batch.dtype)
 
@@ -114,7 +118,7 @@ def main(config_path="./configs/config.yaml"):
     # 5. Run the Optimization and Analysis
     iterations = config['optimizer_params']['iterations']
     batched_vqe_solver.optimize(iterations=iterations, verbose=True)
-    exact_energy = config['analysis_params'].get('exact_energy')
+
     batched_vqe_solver.analyze_results(exact_energy=exact_energy)
 
     print(f"--- Experiment '{exp_name}' Finished ---")

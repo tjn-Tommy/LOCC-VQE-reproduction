@@ -8,12 +8,12 @@ quantum_model:
   num_qubits: 8
 
 backend_options:
-  device: "cuda"
+  device: "cpu"
 
 optimizer_params:
   name: "Adam"
-  learning_rate: 0.001
-  iterations: 100
+  learning_rate: 0.01
+  iterations: 1000
 
 analysis_params:
   exact_energy: -1.5

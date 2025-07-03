@@ -53,11 +53,11 @@ def ancilla_prep(theta_1: np.ndarray, theta_2: np.ndarray) -> QuantumCircuit:
 
 def syndrome_circuit(n: int, ancilla_params: np.ndarray) -> QuantumCircuit:
     """
-    Prepare a syndrome circuit for `n` data qubits, using `n-1` ancillas.
+    Prepare a syndrome circuit for `n_bits` data qubits, using `n_bits-1` ancillas.
 
     Args:
         n (int): Number of data qubits.
-        ancilla_params (np.ndarray): List of parameters for the ancilla preparation circuits. Shape: (n-1, 2, 6).
+        ancilla_params (np.ndarray): List of parameters for the ancilla preparation circuits. Shape: (n_bits-1, 2, 6).
 
     Returns:
         QuantumCircuit: A quantum circuit that prepares the syndrome state.
@@ -72,7 +72,7 @@ def syndrome_circuit(n: int, ancilla_params: np.ndarray) -> QuantumCircuit:
     for i in range(n - 1):
         ancilla_params_i = ancilla_params[i]
         ancilla_box = ancilla_prep(ancilla_params_i[0], ancilla_params_i[1])
-        #qc.append(ancilla_box.to_instruction(), [i, i + 1, n + i])
+        #qc.append(ancilla_box.to_instruction(), [i, i + 1, n_bits + i])
         qc.compose(ancilla_box, [i, i + 1, n + i], inplace=True)
     return qc
 
@@ -83,10 +83,10 @@ def correction_circuit(n: int, param_1: np.ndarray, param_2: np.ndarray, param_3
     version (binary-tree fan-out  ➜  dense ancilla→data layer  ➜  per-qubit clean-up).
 
     Arg:
-        n (int): Number of data qubits (n data + n ancilla).
-        param_1 (np.ndarray): Parameters for the first shell of the correction circuit. Shape: (log2(n), n//2, 3).
-        param_2 (np.ndarray): Parameters for the second shell of the correction circuit. Shape: (n, n, 2).
-        param_3 (np.ndarray): Parameters for the third shell of the correction circuit. Shape: (n, 3).
+        n_bits (int): Number of data qubits (n_bits data + n_bits ancilla).
+        param_1 (np.ndarray): Parameters for the first shell of the correction circuit. Shape: (log2(n_bits), n_bits//2, 3).
+        param_2 (np.ndarray): Parameters for the second shell of the correction circuit. Shape: (n_bits, n_bits, 2).
+        param_3 (np.ndarray): Parameters for the third shell of the correction circuit. Shape: (n_bits, 3).
     """
     corr = QuantumCircuit(2 * n, name="correction")
 
@@ -135,7 +135,7 @@ def GHZ_circuit(n: int, params_flat: ParameterVector) -> QuantumCircuit:
     high-level diagram stays readable.
 
     Arg:
-        n (int): Number of data qubits (n data + n ancilla).
+        n_bits (int): Number of data qubits (n_bits data + n_bits ancilla).
         params_flat (ParameterVector): Flattened parameter vector.
     """
     # Define shapes and sizes to know how to slice and reshape
@@ -181,7 +181,7 @@ def get_num_ghz_params(n: int) -> int:
     if n == 0:
         return 0
     if not (n > 0 and (n & (n - 1) == 0)):
-        raise ValueError("n must be a power of 2 for the correction circuit structure.")
+        raise ValueError("n_bits must be a power of 2 for the correction circuit structure.")
 
     shape_0 = (n - 1, 2, 6)
     shape_1 = (int(np.log2(n)), n // 2, 3)
@@ -220,6 +220,6 @@ if __name__ == "__main__":
 
     # Pretty matplotlib diagram (requires matplotlib)
     fig = qc.draw("mpl", fold=100)
-    fig.suptitle(f"Full Variational Circuit (n = {n})", fontsize=14)
+    fig.suptitle(f"Full Variational Circuit (n_bits = {n})", fontsize=14)
     fig.tight_layout()
     plt.show()
