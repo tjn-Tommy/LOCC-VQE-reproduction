@@ -7,14 +7,14 @@ tc.set_backend("jax")
 
 
 # ----------------------------------SU(2) and SU(4) gates----------------------------------
-def su2(circuit: tc.Circuit, qubit: int, theta: jnp.ndarray) -> tc.Circuit:
+def su2(circuit: tc.Circuit, qubit: int, theta: jax.Array) -> tc.Circuit:
     """
     Apply a SU(2) gate to a single qubit with parameters theta.
 
     Args:
         circuit (tc.Circuit): The quantum circuit to which the gate will be applied.
         qubit (int): The qubit index.
-        theta (jnp.ndarray): A 1D array of shape (3,) containing the parameters for the gate.
+        theta (jax.Array): A 1D array of shape (3,) containing the parameters for the gate.
 
     Returns:
         tc.Circuit: The updated quantum circuit with the SU(2) gate applied.
@@ -24,7 +24,7 @@ def su2(circuit: tc.Circuit, qubit: int, theta: jnp.ndarray) -> tc.Circuit:
     circuit.rz(qubit, theta=theta[2])
     return circuit
 
-def su4(circuit: tc.Circuit, qubit_1:int, qubit_2:int, theta: jnp.ndarray) -> tc.Circuit:
+def su4(circuit: tc.Circuit, qubit_1:int, qubit_2:int, theta: jax.Array) -> tc.Circuit:
     """
     Apply a SU(4) gate to two qubits with parameters theta.
 
@@ -32,7 +32,7 @@ def su4(circuit: tc.Circuit, qubit_1:int, qubit_2:int, theta: jnp.ndarray) -> tc
         circuit (tc.Circuit): The quantum circuit to which the gate will be applied.
         qubit_1 (int): The first qubit index.
         qubit_2 (int): The second qubit index.
-        theta (jnp.ndarray): A 2D array of shape (5, 3) containing the parameters for the gate.
+        theta (jax.Array): A 2D array of shape (5, 3) containing the parameters for the gate.
 
     Returns:
         tc.Circuit: The updated quantum circuit with the SU(4) gate applied.
@@ -43,9 +43,9 @@ def su4(circuit: tc.Circuit, qubit_1:int, qubit_2:int, theta: jnp.ndarray) -> tc
     circuit.rx(qubit_2, theta=theta[1, 0])
     circuit.ry(qubit_2, theta=theta[1, 1])
     circuit.rz(qubit_2, theta=theta[1, 2])
-    circuit.rxx(qubit_1, qubit_2, theta[2, 0])
-    circuit.ryy(qubit_1, qubit_2, theta[2, 1])
-    circuit.rzz(qubit_1, qubit_2, theta[2, 2])
+    circuit.rxx(qubit_1, qubit_2, theta=theta[2, 0])
+    circuit.ryy(qubit_1, qubit_2, theta=theta[2, 1])
+    circuit.rzz(qubit_1, qubit_2, theta=theta[2, 2])
     circuit.rx(qubit_1, theta=theta[3, 0])
     circuit.ry(qubit_1, theta=theta[3, 1])
     circuit.rz(qubit_1, theta=theta[3, 2])
@@ -56,14 +56,14 @@ def su4(circuit: tc.Circuit, qubit_1:int, qubit_2:int, theta: jnp.ndarray) -> tc
 
 
 # ----------------------------------Unitary VQE Circuit----------------------------------
-def unitary_block(circuit: tc.Circuit, n_bits:int, theta: jnp.ndarray) -> tc.Circuit:
+def unitary_block(circuit: tc.Circuit, n_bits:int, theta: jax.Array) -> tc.Circuit:
     """
     Apply a unitary block to the circuit, which consists of pairs of SU(4) gates
 
     Args:
         circuit (tc.Circuit): The quantum circuit to which the unitary block will be applied.
         n_bits (int): The number of bits (qubits) in the circuit.
-        theta (jnp.ndarray): A 1D array of shape (n_bits,) containing the parameters for the SU(4) gates. Shape: (n_bits - 1, 5, 3)
+        theta (jax.Array): A 1D array of shape (n_bits,) containing the parameters for the SU(4) gates. Shape: (n_bits - 1, 5, 3)
 
     Returns:
         tc.Circuit: The updated quantum circuit with the unitary block applied.
@@ -75,13 +75,13 @@ def unitary_block(circuit: tc.Circuit, n_bits:int, theta: jnp.ndarray) -> tc.Cir
         su4(circuit, i, i + 1, theta[i])
     return circuit
 
-def unitary_vqe_circuit(n_bits: int, p0: jnp.ndarray, p1: jnp.ndarray) -> tc.Circuit:
+def unitary_vqe_circuit(n_bits: int, p0: jax.Array, p1: jax.Array) -> tc.Circuit:
     """
     Create a VQE circuit with a unitary block applied to the first n_bits qubits.
 
     Args:
         n_bits (int): The number of bits (qubits) in the circuit.
-        p0 (jnp.ndarray): A 1D array of shape (n_bits - 1, 5, 3) containing the parameters for the SU(4) gates.
+        p0 (jax.Array): A 1D array of shape (n_bits - 1, 5, 3) containing the parameters for the SU(4) gates.
 
     Returns:
         tc.Circuit: The quantum circuit with the unitary block applied.
@@ -117,7 +117,7 @@ def get_unitary_vqe_params(n_bits: int) -> int:
     rotation_params = n_bits * 3
     return su4_params + rotation_params
 
-def long_range_block(n_bits: int, thetas: jnp.ndarray, max_stride: int | None = None) -> tc.Circuit:
+def long_range_block(n_bits: int, thetas: jax.Array, max_stride: int | None = None) -> tc.Circuit:
     """
     Brick-wall SU(4) layers with exponentially growing stride.
 
@@ -156,13 +156,13 @@ def long_range_block(n_bits: int, thetas: jnp.ndarray, max_stride: int | None = 
 
 
 # ----------------------------------LOCC-VQE Circuit----------------------------------
-def ancilla_prep(circuit:tc.Circuit, theta: jnp.ndarray, target_1:int, target_2:int, ancilla:int) -> tc.Circuit:
+def ancilla_prep(circuit:tc.Circuit, theta: jax.Array, target_1:int, target_2:int, ancilla:int) -> tc.Circuit:
     """
     Prepare an ancilla state using a SU(4) gate on two target qubits and an ancilla qubit.
 
     Args:
         circuit (tc.Circuit): The quantum circuit to which the gate will be applied.
-        theta (jnp.ndarray): A 2D array of shape (2, 5, 3) containing the parameters for the SU(4) gates.
+        theta (jax.Array): A 2D array of shape (2, 5, 3) containing the parameters for the SU(4) gates.
         target_1 (int): The first target qubit index.
         target_2 (int): The second target qubit index.
         ancilla (int): The ancilla qubit index.
@@ -178,18 +178,18 @@ def ancilla_prep(circuit:tc.Circuit, theta: jnp.ndarray, target_1:int, target_2:
 
     return circuit
 
-def syndrome_circuit(circuit:tc.Circuit, n_qubits:int, ancilla_params: jnp.ndarray) -> tc.Circuit:
+def syndrome_circuit(circuit:tc.Circuit, n_qubits:int, ancilla_params: jax.Array) -> tc.Circuit:
     """
     Prepare a syndrome circuit for `n_bits` data qubits, using `n_bits-1` ancilla.
 
     Args:
         circuit (tc.Circuit): The quantum circuit to which the syndrome preparation will be applied.
-        ancilla_params (jnp.ndarray): A 2D array of shape (n_bits-1, 2, 5, 3) containing the parameters for the ancilla preparation.
+        ancilla_params (jax.Array): A 2D array of shape (n_bits-1, 2, 5, 3) containing the parameters for the ancilla preparation.
         n_qubits (int): The number of data qubits (n_bits data + n_bits ancilla).
     Returns:
         tc.Circuit: The updated quantum circuit with the syndrome preparation applied.
     """
-
+    ancilla_params = ancilla_params.reshape((n_qubits - 1, 2, 5, 3))
     for i in range(n_qubits):
         circuit.h(i)
 
@@ -197,7 +197,7 @@ def syndrome_circuit(circuit:tc.Circuit, n_qubits:int, ancilla_params: jnp.ndarr
         ancilla_prep(circuit, ancilla_params[i], i, i + 1, n_qubits + i)
     return circuit
 
-def init_syndrome_parameters(n_bits: int, randkey: Any) -> jnp.ndarray:
+def init_syndrome_parameters(n_bits: int, randkey: Any) -> jax.Array:
     """
     Initialize the parameters for the syndrome circuit.
 
@@ -206,34 +206,35 @@ def init_syndrome_parameters(n_bits: int, randkey: Any) -> jnp.ndarray:
         randkey (Any): A JAX random key for parameter initialization.
 
     Returns:
-        jnp.ndarray: A 2D array of shape (n_bits - 1, 2, 5, 3) containing the initialized parameters for the ancilla preparation.
+        jax.Array: A 2D array of shape (n_bits - 1, 2, 5, 3) containing the initialized parameters for the ancilla preparation.
     """
     # Each SU(4) gate has 15 parameters, and there are (n_bits - 1) such gates
-    return jax.random.uniform(randkey, shape=(n_bits - 1, 2, 5, 3), minval=-jnp.pi, maxval=jnp.pi)
+    return jax.random.uniform(randkey, shape=((n_bits - 1)*30,), minval=-jnp.pi, maxval=jnp.pi)
 
-def post_sample_correction(circuit: tc.Circuit, n_bits: int, p0: jnp.ndarray) -> tc.Circuit:
+def post_sample_correction(circuit: tc.Circuit, n_bits: int, p0: jax.Array) -> tc.Circuit:
     """
     Apply a post-sample correction to the circuit, which consists of SU(2) gates on the first n_bits qubits.
 
     Args:
         circuit (tc.Circuit): The quantum circuit to which the correction will be applied.
         n_bits (int): The number of bits (qubits) in the circuit.
-        p0 (jnp.ndarray): A 2D array of shape (n_bits, 3) containing the parameters for the SU(2) gates.
+        p0 (jax.Array): A 2D array of shape (n_bits, 3) containing the parameters for the SU(2) gates.
 
     Returns:
         tc.Circuit: The updated quantum circuit with the correction applied.
     """
+    p0 = p0.reshape((n_bits, 3))
     for i in range(n_bits):
         su2(circuit, i, p0[i])
     return circuit
 
-def syndrome_circuit_wrapper(n_bits: int, p0: jnp.ndarray) -> tc.Circuit:
+def syndrome_circuit_wrapper(n_bits: int, p0: jax.Array) -> tc.Circuit:
     """
     Wrapper for the syndrome circuit that prepares the ancilla state and applies the post-sample correction.
 
     Args:
         n_bits (int): The number of bits (qubits) in the circuit.
-        p0 (jnp.ndarray): A 2D array of shape [(n_bits - 1) * 30] containing the parameters for the ancilla preparation.
+        p0 (jax.Array): A 2D array of shape [(n_bits - 1) * 30] containing the parameters for the ancilla preparation.
 
     Returns:
         tc.Circuit: The quantum circuit with the syndrome preparation and post-sample correction applied.
@@ -243,13 +244,13 @@ def syndrome_circuit_wrapper(n_bits: int, p0: jnp.ndarray) -> tc.Circuit:
     syndrome_circuit(circuit, n_bits, p0)
     return circuit
 
-def post_sample_correction_wrapper(n_bits: int, p0: jnp.ndarray) -> tc.Circuit:
+def post_sample_correction_wrapper(n_bits: int, p0: jax.Array) -> tc.Circuit:
     """
     Wrapper for the post-sample correction that applies SU(2) gates to the first n_bits qubits.
 
     Args:
         n_bits (int): The number of bits (qubits) in the circuit.
-        p0 (jnp.ndarray): A 2D array of shape (n_bits, 3) containing the parameters for the SU(2) gates.
+        p0 (jax.Array): A 2D array of shape (n_bits, 3) containing the parameters for the SU(2) gates.
 
     Returns:
         tc.Circuit: The quantum circuit with the post-sample correction applied.
@@ -259,16 +260,16 @@ def post_sample_correction_wrapper(n_bits: int, p0: jnp.ndarray) -> tc.Circuit:
     post_sample_correction(circuit, n_bits, p0)
     return circuit
 
-def correction_circuit(n_bits: int, circuit: tc.Circuit, p1: jnp.ndarray, p2: jnp.ndarray, p3: jnp.ndarray) -> tc.Circuit:
+def correction_circuit(n_bits: int, circuit: tc.Circuit, p1: jax.Array, p2: jax.Array, p3: jax.Array) -> tc.Circuit:
     """
     Three-shell recovery circuit, faithfully mirroring the TensorCircuit
     version (binary-tree fan-out  ➜  dense ancilla→data layer  ➜  per-qubit clean-up).
 
     Arg:
         n_bits (int): Number of data qubits (n_bits data + n_bits ancilla).
-        param_1 (np.ndarray): Parameters for the first shell of the correction circuit. Shape: (log2(n_bits), n_bits//2, 3).
-        param_2 (np.ndarray): Parameters for the second shell of the correction circuit. Shape: (n_bits, n_bits, 2).
-        param_3 (np.ndarray): Parameters for the third shell of the correction circuit. Shape: (n_bits, 3).
+        param_1 (np.Array): Parameters for the first shell of the correction circuit. Shape: (log2(n_bits), n_bits//2, 3).
+        param_2 (np.Array): Parameters for the second shell of the correction circuit. Shape: (n_bits, n_bits, 2).
+        param_3 (np.Array): Parameters for the third shell of the correction circuit. Shape: (n_bits, 3).
     """
 
     # ---- shell 1: binary-tree fan-out over ancilla -----------------------

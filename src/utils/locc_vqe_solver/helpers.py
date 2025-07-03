@@ -15,13 +15,13 @@ tc.set_backend("jax")
 def convert_ndarray_to_params_single(
     model: nn.Module,
     input_size: int,
-    raw_array: jnp.ndarray,
+    raw_array: jax.Array,
 ) -> dict:
     """
     Given:
       • model:        your Flax nn.Module
       • example_input: a dummy input of the same shape your real x will have
-      • raw_array:     your 2-D ndarray containing exactly one param’s worth of data
+      • raw_array:     your 2-D Array containing exactly one param’s worth of data
     Returns:
       • a dict of the form {'Dense_0': {'kernel': raw_array}}   (or whatever your model’s leaf name is)
     """
@@ -47,9 +47,9 @@ def convert_ndarray_to_params_single(
 convert_ndarray_to_params = jax.vmap(convert_ndarray_to_params_single, in_axes=(None, None, 0), out_axes=0)
 
 def forward_pass(model: nn.Module,
-                x: jnp.ndarray, #batched
+                x: jax.Array, #batched
                 params: dict,
-                 ) -> jnp.ndarray:
+                 ) -> jax.Array:
     # Note: We are using the 'params' variable from the outer scope.
     return model.apply({'params': params}, x)
 
@@ -57,8 +57,8 @@ def forward_pass(model: nn.Module,
 
 
 def jacobian_wrt_params(model: nn.Module,
-                             x: jnp.ndarray,
-                             params: dict) -> jnp.ndarray:
+                             x: jax.Array,
+                             params: dict) -> jax.Array:
     """
     Computes ∂y / ∂θ for *every* parameter θ in the model, all laid out
     in one big Jacobian array of shape (bs, y_size, total_num_params).
@@ -84,7 +84,7 @@ def jacobian_wrt_params(model: nn.Module,
 
 
 def make_batch_keys(input_key: Any,
-                    batch_size: int) -> jax.ndarray:
+                    batch_size: int) -> jax.Array:
     """
     Create `batch_size` independent PRNG keys starting from a single seed.
 
@@ -94,7 +94,7 @@ def make_batch_keys(input_key: Any,
     Returns:
         tuple: (root_key, batch_keys)
             - root_key: jax.random.PRNGKey, the first key for the main computation.
-            - batch_keys: jax.ndarray, an array of PRNG keys for each batch.
+            - batch_keys: jax.Array, an array of PRNG keys for each batch.
     """
     # split into batch_size new keys
     batch_keys = jax.random.split(input_key, batch_size + 1)

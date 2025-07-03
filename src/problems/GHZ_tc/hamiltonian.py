@@ -55,7 +55,7 @@ def tc_energy(circuit: tc.Circuit, n_bits:int, global_term: float, perturb: floa
     for i in range(n_bits - 1):  # OBC
         e += coeff_z * circuit.expectation_ps(z=[i])  # <Z_i>    
     e += coeff_x * circuit.expectation_ps(x=list(range(n_bits)))  # <X_1 X_2 ... X_n>
-    return jax.real(e)
+    return jnp.real(e)
 
 
 

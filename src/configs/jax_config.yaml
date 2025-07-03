@@ -2,11 +2,11 @@
 
 experiment_setup:
   name: "GHZ_VQE_Experiment"
-  num_runs: 1
+  num_runs: 10
   sample_rounds: 10
 
 quantum_model:
-  num_qubits: 8
+  num_qubits: 4
   problem: "GHZ_tc"
   classical_network:
     type: "SimpleNN"

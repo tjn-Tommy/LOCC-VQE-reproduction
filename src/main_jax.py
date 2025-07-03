@@ -1,7 +1,8 @@
 from functools import partial
+import os
+os.environ["JAX_TRACEBACK_FILTERING"] = "off"
 import jax
 import yaml
-import numpy as np
 import importlib
 import optax
 import problems
@@ -9,9 +10,8 @@ import tensorcircuit as tc
 # Our project-specific imports
 from utils import *
 from problems.GHZ_tc import *
-
+from jax import numpy as jnp
 tc.set_backend("jax")
-
 
 def main(config_path="./configs/jax_config.yaml"):
     """
@@ -39,19 +39,22 @@ def main(config_path="./configs/jax_config.yaml"):
     # 2. Build the Quantum Model from the config
     print("Building quantum model...")
     num_qubits = config['quantum_model']['num_qubits']
-    hamiltonian = partial(tc_energy,n_bits = num_qubits, global_term = 16, perturb = 0.2)
+    hamiltonian = partial(tc_energy, global_term = 16, perturb = 0.2)
     reduced_hamiltonian = reduced_hamiltonian_GHZ(num_qubits, 16, 0.2)
     root_key, subkey = make_batch_keys(root_key, batch_size)
-    init_simple_net_vmap = jax.vmap(init_simple_net, in_axes=(0,), out_axes=0)
-    model, params= init_simple_net_vmap(subkey)
-    synd_net = partial(syndrome_circuit_wrapper, n_bits = num_qubits)
+    init_simple_net_vmap = jax.vmap(init_simple_net, in_axes=(0,None), out_axes=0)
+    model = SimpleNet()
+    unravel = get_unravel(num_qubits)
+    params= init_simple_net_vmap(subkey, num_qubits)
+    unravel_vmap = jax.vmap(unravel, in_axes=(0,), out_axes=0)
+    synd_net = syndrome_circuit_wrapper
     root_key, subkey = make_batch_keys(root_key, batch_size)
     init_syndrome_parameters_vmap = jax.vmap(init_syndrome_parameters, in_axes=(None, 0), out_axes=0)
-    synd_params = init_syndrome_parameters_vmap(model, subkey)
-    corr_net = partial(post_sample_correction_wrapper, n_bits = num_qubits)
+    synd_params = init_syndrome_parameters_vmap(num_qubits, subkey)
+    corr_net = post_sample_correction
 
 
-    print(f"Loaded Hamiltonian: '{hamiltonian.to_list()}'")
+    print(f"Loaded Hamiltonian: '{reduced_hamiltonian.to_list()}'")
     exact_energy = ground_truth_solver(reduced_hamiltonian)
     print(f"Exact ground state energy: {exact_energy:.6f}")
 
@@ -62,28 +65,40 @@ def main(config_path="./configs/jax_config.yaml"):
         'gamma': params
     }
     optimizer = optax.adam(learning_rate=config['optimizer_params']['learning_rate'])
-    opt_state = optimizer.init(opt_params)
-    train_step_jit = jax.jit(partial(train_step,
-                                     model=model[0],
+    init_vmap = jax.vmap(optimizer.init, in_axes=(0,), out_axes=0)
+    opt_state = init_vmap(opt_params)
+    train_step_partial = partial(train_step,
+                                     model=model,
+                                     unravel = unravel,
                                      n_bits=num_qubits,
                                      synd=synd_net,
                                      corr=corr_net,
                                      hamiltonian=hamiltonian,
                                      sample_round=config['experiment_setup']['sample_rounds'],
                                      optimizer=optimizer,
-                                     ))
-    def _body(carry, idx):
-        opt_state, opt_params = carry
-        # Run the training step
-        updates, optimizer_state = train_step_jit(opt_params['theta_1'],
-                                    opt_params['gamma'],
-                                    opt_state
-                                    )
-        return (updates, optimizer_state), updates
-    # Loop over the number of iterations
-    (opt_state, opt_params), _ = \
-        jax.lax.scan(_body, (opt_state, opt_params), jnp.arange(config['optimizer_params']['iterations']))
+                                     )
+    print("Trainer configured successfully.")
+    # 5. Run the Training Loop
+    print(f"Starting training for {config['optimizer_params']['iterations']} iterations...")
+    def run_training_loop(opt_state, opt_params):
+        def _body(carry, idx):
+            opt_state, opt_params, index = carry
+            index += 1
+            # Run the training step
+            updates, optimizer_state = train_step_partial(
+                                theta_1 = opt_params['theta_1'],
+                                gamma =opt_params['gamma'],
+                                optimizer_state = opt_state
+                                        )
+            return (optimizer_state, updates, index), (updates, index)
+        # Loop over the number of iterations
+        (opt_state, opt_params, _), (new_param, index) = \
+            jax.lax.scan(_body, (opt_state, opt_params, 0), jnp.arange(config['optimizer_params']['iterations']))
+        return new_param, index
+    run_training_jit = jax.jit(run_training_loop)
 
+    new_param, index = run_training_jit(opt_state, opt_params)
+    print(index)
     print(f"--- Experiment '{exp_name}' Finished ---")
 
 if __name__ == "__main__":

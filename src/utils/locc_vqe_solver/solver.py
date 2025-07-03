@@ -8,6 +8,7 @@ import jax.nn as jnn
 from functools import partial
 from typing import Any
 from flax.core import freeze, unfreeze
+from flax.nnx import update
 from flax.traverse_util import flatten_dict, unflatten_dict
 import optax
 from .helpers import convert_ndarray_to_params, forward_pass, jacobian_wrt_params, make_batch_keys
@@ -16,16 +17,17 @@ from .sampling import get_prob, sample_factory
 tc.set_backend("jax")
 
 def adaptive_vqe_factory(
-                 n: int,
-                 synd: Callable[[tc.Circuit, int, jnp.ndarray], tc.Circuit],
                  theta_1: jnp.ndarray,
-                 corr: Callable[[tc.Circuit, int, jnp.ndarray], tc.Circuit],
                  theta_2: jnp.ndarray,
                  projector_onehot: jnp.ndarray,
                  sample_cond_prob: jnp.ndarray,
+                 n: int,
+                 synd: Callable[[tc.Circuit, int, jnp.ndarray], tc.Circuit],
+                 corr: Callable[[tc.Circuit, int, jnp.ndarray], tc.Circuit],
+
                  hamiltonian: Callable[[tc.Circuit, int], jnp.ndarray],
                  ctype: jnp.dtype = jnp.complex64,
-                 htype: jnp.dtype = jnp.float64,
+                 htype: jnp.dtype = jnp.float32,
                  ) -> jnp.ndarray:
     """
     n_bits:      number of system qubits
@@ -40,8 +42,8 @@ def adaptive_vqe_factory(
     theta_1 = theta_1.astype(ctype)
     theta_2 = theta_2.astype(ctype)
     projector_onehot = projector_onehot.astype(ctype)
-    circuit = tc.Circuit(n * 2)
-    synd(circuit, n, theta_1)
+    circuit = synd(n, theta_1)
+
 
     # predefine the 3 projectors: |0⟩⟨0|, |1⟩⟨1|, I
     projector_set = jnp.array([
@@ -51,15 +53,13 @@ def adaptive_vqe_factory(
     ], dtype=ctype)  # shape (3,2,2)
 
     # apply each projector to its ancilla line
-    def body(idx, circ):
-        # select one-hot for qubit `idx`: shape (3,)
+    for idx in range(n):
+        # select the one-hot for qubit idx: shape (3,)
         sel = projector_onehot[idx]  # (3,)
-        # combine into a 2×2 unitary
+        # compute projector unitary for this qubit
         proj_unit = jnp.sum(sel[:, None, None] * projector_set, axis=0)
-        return circ.any(n + idx, unitary=proj_unit)
-
-    circuit = jax.lax.fori_loop(0, n, body, circuit)
-
+        # then insert it on the ancilla line n_bits+idx
+        circuit.any(n + idx, unitary=proj_unit)
     # append the second ansatz
     corr(circuit, n, theta_2)
 
@@ -70,6 +70,7 @@ def adaptive_vqe_factory(
 
 def grad_theta_1_paramshift_sample(
         n_bits: int,
+        unravel: Callable[[jax.Array], dict],
         synd: Callable[[tc.Circuit, int, jnp.ndarray], tc.Circuit],
         theta_1_batched: jnp.ndarray, # shape (batch_size, theta_1_num)
         corr: Callable[[tc.Circuit, int, jnp.ndarray], tc.Circuit],
@@ -79,14 +80,14 @@ def grad_theta_1_paramshift_sample(
         sample_round: int,
         input_key: jax.random.PRNGKey,
         ctype: jnp.dtype = jnp.complex64,
-        htype: jnp.dtype = jnp.float64,
+        htype: jnp.dtype = jnp.float32,
         ftype: jnp.dtype = jnp.float32,
 ):
 
     # --------------------- 1. factory for helper functions -------------------
     # params: theta_1, theta_2, projector_onehot, sample_cond_prob
     adaptive_vqe = partial(adaptive_vqe_factory,
-                            n_bits=n_bits,
+                            n=n_bits,
                             synd=synd,
                             corr=corr,
                             hamiltonian=hamiltonian,
@@ -97,11 +98,10 @@ def grad_theta_1_paramshift_sample(
     sample = partial(sample_factory,
                         generator=synd,
                         n_bits=n_bits)
-    sample_vmap = jax.vmap(sample, in_axes=(0, None, None), out_axes=(0, 0))
+    sample_vmap = jax.vmap(sample, in_axes=(0, 0), out_axes=(0, 0))
     # ---------------------- 2. Initialize variables and tensors ----------------
     batch_size = theta_1_batched.shape[0]
     theta1_num = theta_1_batched.shape[1]
-    gamma_batched_tiled = jnp.tile(gamma_batched[:, None, None, :], (1, sample_round, theta1_num, 1)) # (batch_size, sample_round, θ₁_num, γ_num)
 
     # build parameter-shifted theta_1
     theta_1_full = jnp.tile( theta_1_batched[:, None, None, :], (1, sample_round, theta1_num, 1)).astype(ftype) # (batch_size, sample_round, θ₁_num, θ₁_num)
@@ -121,26 +121,26 @@ def grad_theta_1_paramshift_sample(
         theta_1_reshaped = jnp.reshape(theta_1_shifted,
                                        (-1, theta1_num))  # (batch_size * sample_round * θ₁_num, θ₁_num)
         gamma_reshaped = jnp.reshape(gamma,
-                                     (-1, gamma_batched.shape[-1]))  # (batch_size * sample_round * θ₁_num, γ_num)
-        gamma_converted = convert_ndarray_to_params(
-            model,
-            n_bits,
-            gamma_reshaped,
-        )
-        randkey_reshaped = jnp.reshape(randkey, (-1, 2))  # (batch_size * sample_round * θ₁_num, 2)
+                                     (batch_size, gamma_batched.shape[-1]))  # (batch_size, γ_num)
+        gamma_converted = unravel(gamma_reshaped)  # convert to params dict for model
+        randkey_reshaped = jnp.reshape(randkey, (-1, 2))  # (batch_size, sample_round * theta1_num, 2)
 
         projector, cond_prob = sample_vmap(randkey_reshaped, theta_1_reshaped)  # shape (batch_size * sample_round * θ₁_num, n_bits), shape (batch_size * sample_round * θ₁_num,)
-
+        measure_result = 2 * (projector - 0.5)
         # one-hot encoding of projectors
         proj_onehot = jnn.one_hot(projector, 3)  # shape (batch_size * sample_round * theta1_num, n_bits, 3)
-
-        theta_2 = forward_pass(
+        forward_pass_vmap = jax.vmap(forward_pass, in_axes=(None, 0, 0), out_axes=0)
+        theta_2 = forward_pass_vmap(
             model,
-            theta_1_reshaped,
+            measure_result.reshape(batch_size, -1, n_bits),  # shape (batch_size, sample_round * θ₁_num, n_bits)
             gamma_converted
-        )  # shape (batch_size * sample_round * θ₁_num, θ₂_num)
-
-        energy = adaptive_vqe_vmap(theta_1_shifted, theta_2, proj_onehot, cond_prob) # shape (batch_size * sample_round * θ₁_num,)
+        )  # shape (batch_size, sample_round * θ₁_num, θ₂_num)
+        # params: theta_1, theta_2, projector_onehot, sample_cond_prob
+        energy = adaptive_vqe_vmap(
+            theta_1_reshaped,
+            theta_2.reshape(batch_size * sample_round * theta1_num, -1),
+            proj_onehot,
+            cond_prob) # shape (batch_size * sample_round * θ₁_num,)
 
         # Reshape back to (batch_size, sample_round, θ₁_num)
         energy = jnp.reshape(energy, (batch_size, sample_round, theta1_num))
@@ -149,21 +149,22 @@ def grad_theta_1_paramshift_sample(
     # ---- (+) shift -----------------------------------------------------------
     theta_1_pos = theta_1_full + shift_tensor # (batch_size, sample_round, θ₁_num, θ₁_num)
     root_key, batch_keys = make_batch_keys(input_key, batch_size * sample_round * theta1_num)
-    energy_pos = _energy(theta_1_pos, gamma_batched_tiled, batch_keys) # (batch_size, sample_round, θ₁_num)
+    energy_pos = _energy(theta_1_pos, gamma_batched, batch_keys) # (batch_size, sample_round, θ₁_num)
 
     # ---- (–) shift -----------------------------------------------------------
     theta_1_neg = theta_1_full - shift_tensor
     root_key, batch_keys = make_batch_keys(root_key, batch_size * sample_round * theta1_num)
-    energy_neg = _energy(theta_1_neg, theta_1_neg, batch_keys)
+    energy_neg = _energy(theta_1_neg, gamma_batched, batch_keys)
 
     # ----- gradient computation ---------------------------------------------------
     grad_theta_1_round = 0.5 * (energy_pos - energy_neg)
-    grad_theta_1 = jnp.mean(grad_theta_1_round, axis=1).T  # batch, θ₁_num
+    grad_theta_1 = jnp.mean(grad_theta_1_round, axis=1)  # batch, θ₁_num
 
-    return grad_theta_1, root_key
+    return grad_theta_1
 
 def grad_gamma_batched(
         n_bits: int,
+        unravel: Callable[[jax.Array], dict],
         synd: Callable[[tc.Circuit, int, jnp.ndarray], tc.Circuit],
         theta_1_batched: jnp.ndarray,  # shape (batch_size, theta_1_num)
         corr: Callable[[tc.Circuit, int, jnp.ndarray], tc.Circuit],
@@ -173,7 +174,7 @@ def grad_gamma_batched(
         sample_round: int,
         input_key: Any,
         ctype: jnp.dtype = jnp.complex64,
-        htype: jnp.dtype = jnp.float64,
+        htype: jnp.dtype = jnp.float32,
         ftype: jnp.dtype = jnp.float32,
 ) -> jnp.ndarray:
     """
@@ -182,7 +183,8 @@ def grad_gamma_batched(
     # --------------------- 1. factory for helper functions -------------------
     # params: theta_1, theta_2, projector_onehot, sample_cond_prob
     adaptive_vqe = partial(adaptive_vqe_factory,
-                            n_bits=n_bits,
+                            n=n_bits,
+                           synd=synd,
                             corr=corr,
                             hamiltonian=hamiltonian,
                             ctype=ctype,
@@ -193,6 +195,7 @@ def grad_gamma_batched(
                         generator=synd,
                         n_bits=n_bits)
     sample_vmap = jax.vmap(sample, in_axes=(0, 0), out_axes=(0, 0))
+    unravel_vmap = jax.vmap(unravel, in_axes=(0,), out_axes=0)
     # ---------------------- 2. Initialize variables and tensors ----------------
     batch_size = theta_1_batched.shape[0]
     theta1_num = theta_1_batched.shape[1]
@@ -207,23 +210,28 @@ def grad_gamma_batched(
         measure_result = 2 * (projector - 0.5) # convert to {-1, 1} for projectors
         # one-hot encoding of projectors
         proj_onehot = jnn.one_hot(projector, 3)  # shape (batch_size, n_bits, 3)
-        params = convert_ndarray_to_params(model, theta_1, gamma)
+        params = unravel(gamma)
         theta_2 = forward_pass(model, measure_result, params)  # shape (batch_size, theta_2_num)
         return theta_2, proj_onehot, cond_prob, measure_result
 
     # dummy theta_2 for get the size of the output
     root_key, dummy_key = jax.random.split(input_key)
-    dummy_theta_2, _, _, _ = _theta_2_generator(dummy_theta_1[None, :], dummy_gamma[None, :], dummy_key[None, :])
+    _theta_2_generator_vmap = jax.vmap(_theta_2_generator, in_axes=(0, 0, 0), out_axes=(0, 0, 0, 0))
+    dummy_theta_2, _, _, _ = _theta_2_generator(dummy_theta_1[None, :], dummy_gamma, dummy_key[None, :])
     theta2_num = dummy_theta_2.shape[-1]  # number of parameters in theta_2
 
     # ---- 3. Generate parameter-shifted theta_2 -----------------------
     root_key, batch_keys = make_batch_keys(root_key, batch_size * sample_round)
     # theta_2_batched shape (batch_size * sample_round, θ₂_num), projector_onehot_batched shape (batch_size * sample_round, n_bits, 3), sample_cond_prob_batched shape (batch_size * sample_round, )
     theta_2_batched, projector_onehot_batched, sample_cond_prob_batched, measure_result_batched = \
-        _theta_2_generator(jnp.tile(theta_1_batched[:, None, :], (1, sample_round, 1)).reshape(-1, theta1_num),  # (batch_size * sample_round, θ₁_num)
-                            jnp.tile(gamma_batched[:, None, :], (1, sample_round, 1)).reshape(-1, gamma_num),  # (batch_size * sample_round, γ_num)
-                                batch_keys)  # (batch_size * sample_round, θ₂_num)
-
+        _theta_2_generator_vmap(jnp.tile(theta_1_batched[:, None, :], (1, sample_round, 1)),  # (batch_size, sample_round, θ₁_num)
+                            gamma_batched.reshape(-1, gamma_num),  # (batch_size, γ_num)
+                                batch_keys.reshape(-1,sample_round, 2)  # (batch_size, sample_round, θ₂_num)
+                                )
+    theta_2_batched = theta_2_batched.reshape(-1, theta2_num)
+    projector_onehot_batched = projector_onehot_batched.reshape(-1, n_bits, 3)  # (batch_size * sample_round * θ₂_num, n_bits, 3)
+    sample_cond_prob_batched = sample_cond_prob_batched.reshape(-1)  # (batch_size * sample_round * θ₂_num, )
+    measure_result_batched = measure_result_batched.reshape(-1, n_bits)  # (batch_size * sample_round * θ₂_num, n_bits)
     shift_tensor = (jnp.pi / 2) * jnp.eye(theta2_num, dtype=jnp.float32)
     shift_tensor_batched_tiled = jnp.tile(shift_tensor[None,  :, :], (batch_size * sample_round, 1, 1))  # (batch_size * sample_round, θ₂_num, θ₂_num)
     theta_2_batched_tiled = jnp.tile(theta_2_batched[:, None, :], (1, theta2_num, 1)).astype(ftype)
@@ -234,6 +242,7 @@ def grad_gamma_batched(
     projector_onehot_tiled = jnp.tile(projector_onehot_batched[:, None, :, :], (1, theta2_num, 1, 1)).reshape(-1, n_bits, 3).astype(ftype)  # (batch_size * sample_round * θ₂_num, n_bits, 3)
     sample_cond_prob_tiled = jnp.tile(sample_cond_prob_batched[:, None], (1, theta2_num)).reshape(-1)  # (batch_size * sample_round * θ₂_num, )
     # ---- 4. Compute the energy using parameter-shift rule -----------------------
+    # params: theta_1, theta_2, projector_onehot, sample_cond_prob
     pos_energy = adaptive_vqe_vmap(
         theta_1_batched_tiled,
         theta_2_pos,
@@ -250,14 +259,13 @@ def grad_gamma_batched(
 
     # ----- gradient computation ---------------------------------------------------
     grad_theta_2_round = 0.5 * (pos_energy - neg_energy)  # (batch_size * sample_round * θ₂_num, )
-    grad_theta_2 = grad_theta_2_round.reshape(batch_size, sample_round, theta2_num).T  # (batch_size, sample_round, θ₂_num)
+    grad_theta_2 = grad_theta_2_round.reshape(batch_size, sample_round, theta2_num)  # (batch_size, sample_round, θ₂_num)
     jacobian_vmap = jax.vmap(jacobian_wrt_params, in_axes=(None, 0, 0), out_axes=0)
     jacobian = jacobian_vmap(
         model,
         measure_result_batched.reshape(batch_size, sample_round, n_bits), # (batch_size, sample_round, n_bits)
-        convert_ndarray_to_params(model, n_bits, gamma_batched)  # (batch_size, γ_num)
+        unravel_vmap(gamma_batched)  # (batch_size, γ_num)
     )  # (batch_size, sample_round, theta2_num, gamma_num)
-
     # Compute the gradient with respect to gamma
     gamma_grads_per_sample = jnp.einsum(
         'b s t g, b s t -> b s g',
@@ -270,6 +278,7 @@ def grad_gamma_batched(
 
 def train_step(
     model: nn.Module,
+    unravel: Callable,
     n_bits: int,
     synd: Callable[[tc.Circuit, int, jnp.ndarray], tc.Circuit],
     theta_1: jnp.ndarray,
@@ -284,12 +293,14 @@ def train_step(
     Perform a single training step for the adaptive VQE.
     Args:
         model: Flax nn.Module, the model to optimize.
+        unravel: Callable, function to convert model parameters to a flat array.
         n_bits: int, number of system qubits.
         synd: Callable, function to apply the syndrome circuit.
         theta_1: jnp.ndarray, angles for the first ansatz.
         corr: Callable, function to apply the correlation circuit.
         hamiltonian: Callable, function to compute the Hamiltonian expectation.
         gamma: jnp.ndarray, parameters for the second ansatz.
+        sample_round: int, number of sampling rounds.
         optimizer: optax.GradientTransformation, optimizer to use.
         optimizer_state: optax.OptState, state of the optimizer.
     Returns:
@@ -297,8 +308,10 @@ def train_step(
         optimizer_state: optax.OptState, updated state of the optimizer.
     """
     # Compute the gradient with respect to theta_1
+    unravel_vmap = jax.vmap(unravel, in_axes=(0,), out_axes=0)
     grad_theta_1 = grad_theta_1_paramshift_sample(
         n_bits=n_bits,
+        unravel =unravel_vmap,
         synd=synd,
         theta_1_batched=theta_1,
         corr=corr,
@@ -312,6 +325,7 @@ def train_step(
     # Compute the gradient with respect to gamma
     grad_gamma = grad_gamma_batched(
         n_bits=n_bits,
+        unravel=unravel,
         synd=synd,
         theta_1_batched=theta_1,
         corr=corr,
@@ -332,5 +346,6 @@ def train_step(
         'gamma': grad_gamma
     }
     # Update the optimizer state
-    updates, optimizer_state = optimizer.update(opt_grads, optimizer_state, opt_params)
+    update_vmap = jax.vmap(optimizer.update, in_axes=(0, 0, 0), out_axes=(0, 0))
+    updates, optimizer_state = update_vmap(opt_grads, optimizer_state, opt_params)
     return updates, optimizer_state
