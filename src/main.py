@@ -1,127 +1,255 @@
+from functools import partial
+import os
+#os.environ["JAX_TRACEBACK_FILTERING"] = "off"
+from jax import config
+# Must happen before any JAX imports
+config.update("jax_enable_x64", True)
+import jax
 import yaml
+import time
+import matplotlib.pyplot as plt
+import datetime
+import importlib
+import optax
+import problems
+import tensorcircuit as tc
 import numpy as np
-import torch
-from qiskit.circuit import ParameterVector
-from qiskit_machine_learning.gradients import ParamShiftEstimatorGradient
-# Qiskit imports
-from qiskit_aer import AerSimulator
-from qiskit.primitives import BackendEstimatorV2
-from problems import *
-
 # Our project-specific imports
 from utils import *
+from problems.GHZ_tc import *
+from jax import numpy as jnp
+tc.set_backend("jax")
 
 
+def make_multi_rate_tx(lr_theta1: float, lr_gamma: float) -> optax.GradientTransformation:
+    """Adam(lr_theta1) for θ₁ leaves, Adam(lr_gamma) for γ leaves."""
+    transforms = {
+        "theta_1": optax.adamw(learning_rate=lr_theta1),
+        "gamma":   optax.adamw(learning_rate=lr_gamma,weight_decay=0.01),
+        "default": optax.adamw(learning_rate=lr_gamma),   # safeguard for stray leaves
+    }
 
-def main(config_path="./configs/config.yaml"):
+    # --- NEW: label_fn takes *params* and returns a label-PyTree -------------
+    def label_fn(params):
+        def _assign(path, _):
+            top = path[0]                  # ('theta_1', …), ('gamma', …)
+            if top in ("theta_1", "gamma"):
+                return top
+            return "default"
+        # tree_map_with_path walks the PyTree, giving (path, leaf) pairs
+        return jax.tree_util.tree_map_with_path(_assign, params)
+
+    return optax.multi_transform(transforms, label_fn)
+
+def main(config_path="./configs/jax_config.yaml"):
     """
     Main function to run a VQE experiment based on a config file.
     """
     # 1. Load configuration and select device
+    start_time = time.time()
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
 
-    exp_name = config['experiment_setup']['name']
-    print(f"--- Starting VQE Experiment: {exp_name} ---")
+    # 2) build the import path
+    #    e.g. "problems.GHZ_tc.network"
+    # path = f"problems.{config['quantum_model']['problem']}"
+    # 3) import the module
+    # mod = importlib.import_module(path)
+    # 4) grab the class (or function) by name
+    # Cls = getattr(mod, cfg["class"])
+    # 5) instantiate / call it
+    # instance = Cls(...)
 
-    use_cuda = config['backend_options']['device'] == 'cuda' and torch.cuda.is_available()
-    device = torch.device("cuda" if use_cuda else "cpu")
-    print(f"Selected execution device: {device}")
+    exp_name = config['experiment_setup']['name']
+    batch_size = config['experiment_setup']['num_runs']
+    print(f"--- Starting VQE Experiment: {exp_name} ---")
+    root_key = jax.random.PRNGKey(42)
 
     # 2. Build the Quantum Model from the config
     print("Building quantum model...")
     num_qubits = config['quantum_model']['num_qubits']
-    num_ansatz_params = get_num_ghz_params(num_qubits)
-    params_vec = ParameterVector('θ', length=num_ansatz_params)
-    circuit = GHZ_circuit(num_qubits, params_vec)
-    hamiltonian = hamiltonian_GHZ(num_qubits, 16, 0.2)
-    reduced_hamiltonian = reduced_hamiltonian_GHZ(num_qubits, 16, 0.2)
-    print(f"Loaded Ansatz with {num_ansatz_params} parameters.")
-    print(f"Loaded Hamiltonian: '{hamiltonian.to_list()}'")
+    hamiltonian = partial(tc_energy, global_term = config['quantum_model']['hamiltonian']['global_term'],
+                          perturb = config['quantum_model']['hamiltonian']['perturb']
+                          )
+    reduced_hamiltonian = reduced_hamiltonian_GHZ(num_qubits, config['quantum_model']['hamiltonian']['global_term'], config['quantum_model']['hamiltonian']['perturb'])
+    root_key, subkey = make_batch_keys(root_key, batch_size)
+    init_simple_net_vmap = jax.vmap(init_simple_net, in_axes=(0,None), out_axes=0)
+    model = SimpleNet()
+    unravel = get_unravel(num_qubits)
+    params= init_simple_net_vmap(subkey, num_qubits)
+    synd_net = syndrome_circuit_wrapper
+    root_key, subkey = make_batch_keys(root_key, batch_size)
+    init_syndrome_parameters_vmap = jax.vmap(init_syndrome_parameters, in_axes=(None, 0), out_axes=0)
+    synd_params = init_syndrome_parameters_vmap(num_qubits, subkey)
+    corr_net = post_sample_correction
 
+
+    print(f"Loaded Hamiltonian: '{reduced_hamiltonian.to_list()}'")
     exact_energy = ground_truth_solver(reduced_hamiltonian)
     print(f"Exact ground state energy: {exact_energy:.6f}")
 
-    # 3. Configure Backend and Bridge to PyTorch
-    print("Configuring Qiskit backend...")
-    aer_sim = AerSimulator(method='statevector',
-                           device='GPU' if use_cuda else 'CPU',
-                           cuStateVec_enable=True,
-                           blocking_enable=True,
-                           )
-    estimator = BackendEstimatorV2(backend=aer_sim,)
-    qnn = qnn_wrapper(circuit, [hamiltonian], estimator).to(device)
-    init_theta = torch.rand(num_ansatz_params, device=device) * (2 * np.pi)
-    qnn.weight = torch.nn.Parameter(init_theta, requires_grad=True)
-    # Wrapper function for the cost
-    grad_estimator = ParamShiftEstimatorGradient(estimator)
-
-    class EstimatorLayer(torch.autograd.Function):
-        """
-        A differentiable wrapper around Qiskit EstimatorV2 + ParamShiftEstimatorGradient.
-        Forward:  expectation values  ⟨ψ(θ)| H |ψ(θ)⟩
-        Backward: analytic parameter-shift gradient  d/dθ ⟨ψ(θ)| H |ψ(θ)⟩
-        """
-
-        @staticmethod
-        def forward(ctx, params_batch: torch.Tensor) -> torch.Tensor:
-            # 1.  Launch the batched Estimator job ---------------------------
-
-            theta_list = params_batch.detach().cpu().numpy().tolist()
-            pubs = [(circuit, hamiltonian, p.detach().cpu().numpy()) for p in params_batch]
-            ev_job = estimator.run(pubs=pubs)
-
-            evs_np   = [r.data.evs for r in ev_job.result()]   # shape (B,)
-            vals = [a.item() for a in evs_np]
-            # 2.  Save inputs for the backward pass --------------------------
-            ctx.save_for_backward(params_batch)  # we need the *values*
-            ctx.theta_list = theta_list  # gradient interface is NumPy
-
-            return torch.tensor(vals,
-                                device=params_batch.device,
-                                dtype=params_batch.dtype)
-
-        @staticmethod
-        def backward(ctx, grad_output: torch.Tensor):
-            (params_batch,) = ctx.saved_tensors
-
-            # 1.  Compute analytic gradients via parameter-shift ------------
-            circuits = [circuit] * len(ctx.theta_list)
-            observables = [hamiltonian] * len(ctx.theta_list)
-            grad_job = grad_estimator.run(circuits, observables, ctx.theta_list)
-            grads_np = grad_job.result().gradients  # (B, n_params)
-            stacked_grads_np = np.array(grads_np)
-            grads = torch.tensor(stacked_grads_np,
-                                 device=params_batch.device,
-                                 dtype=params_batch.dtype)
-
-            # 2.  Chain rule: dL/dθ = dL/dE · dE/dθ -------------------------
-            return grad_output.unsqueeze(1) * grads  # same shape as params_batch
-
-    def cost_function(params_batch: torch.Tensor) -> torch.Tensor:
-        return EstimatorLayer.apply(params_batch)
-
-
     # 4. Prepare and Configure the Trainer
     print("Configuring the trainer...")
-    num_runs = config['experiment_setup']['num_runs']
-    initial_params_batch = np.random.uniform(0, 2 * np.pi, size=(num_runs, num_ansatz_params))
-
-    batched_vqe_solver = BatchedVQE(
-        cost_function=cost_function,
-        initial_params_batch=initial_params_batch,
-        optimizer_name=config['optimizer_params']['name'],
-        learning_rate=config['optimizer_params']['learning_rate'],
-        device=device
+    opt_params = {
+        'theta_1': synd_params.astype(jnp.float64),
+        'gamma': params.astype(jnp.float64)
+    }
+    optimizer = make_multi_rate_tx(
+        lr_theta1=config["optimizer_params"]["lr_theta1"],
+        lr_gamma=config["optimizer_params"]["lr_gamma"],
     )
 
-    # 5. Run the Optimization and Analysis
-    iterations = config['optimizer_params']['iterations']
-    batched_vqe_solver.optimize(iterations=iterations, verbose=True)
+    init_vmap = jax.vmap(optimizer.init, in_axes=(0,), out_axes=0)
+    opt_state = init_vmap(opt_params)
+    train_step_partial = partial(train_step,
+                                     model=model,
+                                     unravel = unravel,
+                                     n_bits=num_qubits,
+                                     synd=synd_net,
+                                     corr=corr_net,
+                                     hamiltonian=hamiltonian,
+                                     sample_round=config['experiment_setup']['sample_rounds'],
+                                     optimizer=optimizer,
+                                     )
+    print("Trainer configured successfully.")
+    # 5. Run the Training Loop
+    print(f"Starting training for {config['optimizer_params']['iterations']} iterations...")
+    root_key, subkey = jax.random.split(root_key, 2)
+    def run_training_loop(opt_state, opt_params):
+        def _body(carry, idx):
+            opt_state, opt_params, index, rootkey = carry
+            index += 1
+            # Run the training step
+            rootkey, subkey = jax.random.split(rootkey, 2)
+            updates, optimizer_state, gd_var_theta1, gd_var_gamma, mean_grad_theta1, mean_grad_gamma = train_step_partial(
+                                theta_1 = opt_params['theta_1'],
+                                gamma =opt_params['gamma'],
+                                optimizer_state = opt_state,
+                                rootkey = subkey,
+                                        )
+            rootkey, subkey = jax.random.split(rootkey, 2)
+            min_energy, mean_energy \
+                = energy_estimator(model=model,
+                            unravel = unravel,
+                            n_bits=num_qubits,
+                            synd=synd_net,
+                            theta_1_batched=updates['theta_1'],
+                            corr=corr_net,
+                            gamma_batched=updates['gamma'],
+                            hamiltonian=hamiltonian,
+                            sample_round=config['experiment_setup']['sample_rounds'],
+                            input_key = subkey,
+                             )
+            return (optimizer_state, updates, index, rootkey), (index, min_energy, mean_energy, gd_var_theta1, gd_var_gamma, mean_grad_theta1, mean_grad_gamma)
+        # Loop over the number of iterations
+        (opt_state, opt_params, _, _), (index, min_energy, mean_energy, gd_var_theta1, gd_var_gamma, mean_grad_theta1, mean_grad_gamma) = \
+            jax.lax.scan(_body, (opt_state, opt_params, 0, subkey), jnp.arange(config['optimizer_params']['iterations']))
+        return index, min_energy, mean_energy, gd_var_theta1, gd_var_gamma, mean_grad_theta1, mean_grad_gamma
+    run_training_jit = jax.jit(run_training_loop)
 
-    batched_vqe_solver.analyze_results(exact_energy=exact_energy)
+    index, min_energy, mean_energy, gd_var_theta1, gd_var_gamma, mean_grad_theta1, mean_grad_gamma = run_training_jit(opt_state, opt_params)
+    print(f"Training completed after {config['optimizer_params']['iterations']} iterations.")
+    # 6. Save the results,
+    print("Saving results...")
+    end_time = time.time()
+    total_cost = end_time - start_time
+    timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    minimum_energy = jnp.min(min_energy)
+    results = {
+        'experiment_name': exp_name,
+        'total_cost_time': total_cost,
+        'num_qubits': num_qubits,
+        'exact_energy': exact_energy,
+        'final_min_energy': minimum_energy,
+        'min_energy': min_energy,
+        'mean_energy': mean_energy,
+        'grad_theta1': mean_grad_theta1,
+        'final_gd_var_theta1': gd_var_theta1,
+        'grad_gamma': mean_grad_gamma,
+        'final_gd_var_gamma': gd_var_gamma,
+    }
 
+
+    def to_py(obj):
+        if isinstance(obj, np.ndarray) or hasattr(obj, "tolist"):
+            return obj.tolist()
+        if hasattr(obj, "__float__"):
+            return float(obj)
+        if hasattr(obj, "__int__"):
+            return int(obj)
+        if isinstance(obj, dict):
+            return {k: to_py(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [to_py(v) for v in obj]
+        return obj
+        # Save the results to a YAML file
+    out_dir = os.path.join("results", exp_name, timestamp_str)
+    os.makedirs(out_dir, exist_ok=True)
+    results_path = os.path.join(out_dir, f"results_{timestamp_str}.yaml")
+    with open(results_path, 'w') as f:
+        yaml.dump(to_py(results), f)
+    print(f"Results saved to {results_path}")
+    print("Results:", results['final_min_energy'])
+    print(f"Total time taken: {total_cost:.2f} seconds")
+
+    # 7. Plot the results
+    it = np.array(index)
+    min_e = np.array(min_energy)
+    var_t1 = np.array(gd_var_theta1)
+    var_g = np.array(gd_var_gamma)
+    exact_e = float(exact_energy)  # scalar
+
+    # 1) Min energy vs. iteration
+    plt.figure()
+    plt.plot(it, min_e, marker='o')
+    plt.xlabel('Iteration')
+    plt.ylabel('Min Energy')
+    plt.title(f'{exp_name}: Min Energy per Iteration')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, 'min_energy_plot.png'))
+    plt.show()
+
+    # 2) Gradient variances vs. iteration
+    plt.figure()
+    plt.plot(it, var_t1, marker='o', label='Var(θ1)')
+    plt.plot(it, var_g, marker='x', label='Var(γ)')
+    plt.xlabel('Iteration')
+    plt.ylabel('Gradient Variance')
+    plt.title(f'{exp_name}: Gradient Variance per Iteration')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, 'grad_var_plot.png'))
+    plt.show()
+
+    # 3) Difference between exact energy and min energy
+    diff_e = exact_e - min_e  # vector of differences
+
+    plt.figure()
+    plt.plot(it, diff_e, marker='s', color='C2')
+    plt.xlabel('Iteration')
+    plt.ylabel('Exact − Min Energy')
+    plt.title(f'{exp_name}: Energy Gap per Iteration')
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, 'energy_gap_plot.png'))
+    plt.show()
     print(f"--- Experiment '{exp_name}' Finished ---")
 
+    # 4) Mean gradient vs. iteration
+    mean_grad_t1 = np.array(mean_grad_theta1)
+    mean_grad_g = np.array(mean_grad_gamma)
+    plt.figure()
+    plt.plot(it, mean_grad_t1, marker='o', label='Mean Grad(θ1)')
+    plt.plot(it, mean_grad_g, marker='x', label='Mean Grad(γ)')
+    plt.xlabel('Iteration')
+    plt.ylabel('Mean Gradient')
+    plt.title(f'{exp_name}: Mean Gradient per Iteration')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, 'mean_grad_plot.png'))
+    plt.show()
 if __name__ == "__main__":
     main()

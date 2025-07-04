@@ -1,4 +1,7 @@
 from collections.abc import Callable
+from jax import config
+# Must happen before any JAX imports
+config.update("jax_enable_x64", True)
 import flax.linen as nn
 import tensorcircuit as tc
 import jax
@@ -26,8 +29,8 @@ def adaptive_vqe_factory(
                  corr: Callable[[tc.Circuit, int, jnp.ndarray], tc.Circuit],
 
                  hamiltonian: Callable[[tc.Circuit, int], jnp.ndarray],
-                 ctype: jnp.dtype = jnp.complex64,
-                 htype: jnp.dtype = jnp.float32,
+                 ctype: jnp.dtype = jnp.complex128,
+                 htype: jnp.dtype = jnp.float64,
                  ) -> jnp.ndarray:
     """
     n_bits:      number of system qubits
@@ -79,9 +82,9 @@ def grad_theta_1_paramshift_sample(
         hamiltonian: Callable[[tc.Circuit, int], jnp.ndarray],
         sample_round: int,
         input_key: jax.random.PRNGKey,
-        ctype: jnp.dtype = jnp.complex64,
-        htype: jnp.dtype = jnp.float32,
-        ftype: jnp.dtype = jnp.float32,
+        ctype: jnp.dtype = jnp.complex128,
+        htype: jnp.dtype = jnp.float64,
+        ftype: jnp.dtype = jnp.float64,
 ):
 
     # --------------------- 1. factory for helper functions -------------------
@@ -106,7 +109,7 @@ def grad_theta_1_paramshift_sample(
     # build parameter-shifted theta_1
     theta_1_full = jnp.tile( theta_1_batched[:, None, None, :], (1, sample_round, theta1_num, 1)).astype(ftype) # (batch_size, sample_round, θ₁_num, θ₁_num)
 
-    shift_tensor = (jnp.pi / 2) * jnp.eye(theta1_num, dtype=jnp.float32)
+    shift_tensor = (jnp.pi / 2) * jnp.eye(theta1_num, dtype=jnp.float64)
     shift_tensor = jnp.tile( shift_tensor[None, None, :, :], (batch_size, sample_round, 1, 1)) # (batch_size, sample_round, θ₁_num, θ₁_num)
 
     # ---- 3. Compute the energy using parameter-shift rule -----------------------
@@ -175,9 +178,9 @@ def grad_gamma_batched(
         hamiltonian: Callable[[tc.Circuit, int], jnp.ndarray],
         sample_round: int,
         input_key: Any,
-        ctype: jnp.dtype = jnp.complex64,
-        htype: jnp.dtype = jnp.float32,
-        ftype: jnp.dtype = jnp.float32,
+        ctype: jnp.dtype = jnp.complex128,
+        htype: jnp.dtype = jnp.float64,
+        ftype: jnp.dtype = jnp.float64,
 ):
     """
     Compute the gradient of the energy with respect to theta_2 using parameter-shift rule.
@@ -234,7 +237,7 @@ def grad_gamma_batched(
     projector_onehot_batched = projector_onehot_batched.reshape(-1, n_bits, 3)  # (batch_size * sample_round * θ₂_num, n_bits, 3)
     sample_cond_prob_batched = sample_cond_prob_batched.reshape(-1)  # (batch_size * sample_round * θ₂_num, )
     measure_result_batched = measure_result_batched.reshape(-1, n_bits)  # (batch_size * sample_round * θ₂_num, n_bits)
-    shift_tensor = (jnp.pi / 2) * jnp.eye(theta2_num, dtype=jnp.float32)
+    shift_tensor = (jnp.pi / 2) * jnp.eye(theta2_num, dtype=ftype)
     shift_tensor_batched_tiled = jnp.tile(shift_tensor[None,  :, :], (batch_size * sample_round, 1, 1))  # (batch_size * sample_round, θ₂_num, θ₂_num)
     theta_2_batched_tiled = jnp.tile(theta_2_batched[:, None, :], (1, theta2_num, 1)).astype(ftype)
     theta_2_pos = (theta_2_batched_tiled + shift_tensor_batched_tiled).reshape(-1, theta2_num)
@@ -353,9 +356,11 @@ def train_step(
     # Update the optimizer state
     update_vmap = jax.vmap(optimizer.update, in_axes=(0, 0, 0), out_axes=(0, 0))
     updates, optimizer_state = update_vmap(opt_grads, optimizer_state, opt_params)
+    mean_grad_theta1 = jnp.mean(grad_theta_1)
+    mean_grad_gamma = jnp.mean(grad_gamma)
     mean_grad_var_theta1 = jnp.mean(grad_var_theta1)
     mean_grad_var_gamma = jnp.mean(grad_var_gamma)
-    return updates, optimizer_state, mean_grad_var_theta1, mean_grad_var_gamma
+    return updates, optimizer_state, mean_grad_var_theta1, mean_grad_var_gamma, mean_grad_theta1, mean_grad_gamma
 
 def energy_estimator(
         n_bits: int,
@@ -368,9 +373,9 @@ def energy_estimator(
         hamiltonian: Callable[[tc.Circuit, int], jnp.ndarray],
         sample_round: int,
         input_key: jax.random.PRNGKey,
-        ctype: jnp.dtype = jnp.complex64,
-        htype: jnp.dtype = jnp.float32,
-        ftype: jnp.dtype = jnp.float32,
+        ctype: jnp.dtype = jnp.complex128,
+        htype: jnp.dtype = jnp.float64,
+        ftype: jnp.dtype = jnp.float64,
 ):
 
     # --------------------- 1. factory for helper functions -------------------

@@ -1,4 +1,7 @@
 from collections.abc import Callable
+from jax import config
+# Must happen before any JAX imports
+config.update("jax_enable_x64", True)
 import flax.linen as nn
 import tensorcircuit as tc
 import jax
@@ -10,6 +13,7 @@ from typing import Any
 from flax.core import freeze, unfreeze
 from flax.traverse_util import flatten_dict, unflatten_dict
 from jax.flatten_util import ravel_pytree
+
 tc.set_backend("jax")
 
 def convert_ndarray_to_params_single(

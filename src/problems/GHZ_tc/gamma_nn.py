@@ -17,9 +17,14 @@ tc.set_backend("jax")
 class SimpleNet(nn.Module):
     @nn.compact
     def __call__(self, x):
-        x = nn.Dense(features=60)(x)
+        out = nn.Dense(features=12)(x)
+        x = nn.Dense(features=32)(x)
         x = nn.relu(x)
         x = nn.Dense(features=12)(x)
+        x = x + out  # residual connection
+        x = nn.tanh(x)
+        # scale to [-pi/2, pi/2], use JAX form pi
+        x = x * (jnp.pi / 2)
         return x
 
 def init_simple_net(rng: jax.random.PRNGKey,

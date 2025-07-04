@@ -1,4 +1,7 @@
 from collections.abc import Callable
+from jax import config
+# Must happen before any JAX imports
+config.update("jax_enable_x64", True)
 import flax.linen as nn
 import tensorcircuit as tc
 import jax
@@ -17,7 +20,7 @@ def get_prob(n: int,
              theta_1: jax.Array,
              projector_onehot: jax.Array,
              prob_idx: int,
-             ctype: jnp.dtype = jnp.complex64) -> jax.Array:
+             ctype: jnp.dtype = jnp.complex128) -> jax.Array:
     """
     n_bits: number of system qubits
     generator: function that builds the base circuit
@@ -64,30 +67,30 @@ def sample_factory(
     n_bits: int,
 ) -> tuple[jax.Array, jax.Array]:
     # initialise projector state: 2 denotes identity (no measurement yet)
-    projector_init = 2 * jnp.ones((n_bits,), dtype=jnp.float32)
-    cond_init = jnp.ones((), dtype=jnp.float32)
+    projector_init = 2 * jnp.ones((n_bits,), dtype=jnp.float64)
+    cond_init = jnp.ones((), dtype=jnp.float64)
 
     def body(carry, idx):
         key, proj, cond = carry
         key, subkey = jax.random.split(key)
 
         proj_tmp = proj.at[idx].set(2.)
-        proj_onehot = jnn.one_hot(proj_tmp.astype(jnp.int32), 3, dtype=jnp.float32)
+        proj_onehot = jnn.one_hot(proj_tmp.astype(jnp.int32), 3, dtype=jnp.float64)
 
         # Instead of using vmap, compute each expectation explicitly
-        expect_vec = jnp.zeros(n_bits, dtype=jnp.float32)
+        expect_vec = jnp.zeros(n_bits, dtype=jnp.float64)
         for j in range(n_bits):
             expect_vec = expect_vec.at[j].set(
                 get_prob(n_bits, generator, theta_1, proj_onehot, j)
             )
 
         expect_z_raw = expect_vec[idx]
-        expect_z = expect_z_raw.astype(jnp.float32) / cond
+        expect_z = expect_z_raw.astype(jnp.float64) / cond
         p0 = jnp.clip((1.0 + expect_z) / 2.0, 0.0, 1.0)
         probs = jnp.stack([p0, 1.0 - p0])
 
         draw = jax.random.categorical(subkey, jnp.log(probs))
-        proj = proj.at[idx].set(draw.astype(jnp.float32))
+        proj = proj.at[idx].set(draw.astype(jnp.float64))
         cond = cond * probs[draw]
 
         return (key, proj, cond), None

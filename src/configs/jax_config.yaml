@@ -2,7 +2,7 @@
 
 experiment_setup:
   name: "GHZ_VQE_Experiment"
-  num_runs: 16
+  num_runs: 4
   sample_rounds: 128
 
 quantum_model:
@@ -16,7 +16,8 @@ quantum_model:
 
 optimizer_params:
   name: "Adam"
-  learning_rate: 0.01
+  lr_theta1: 1.0e-3     # learning-rate for θ₁  (syndrome angles)
+  lr_gamma: 1.0e-6      # learning-rate for γ   (MLP weights)
   iterations: 100
 
 
