@@ -2,7 +2,7 @@
 
 experiment_setup:
   name: "2Qubit_Ising_HardwareEfficient_GPU_Run"
-  num_runs: 1
+  num_runs: 10
 
 quantum_model:
   num_qubits: 8
