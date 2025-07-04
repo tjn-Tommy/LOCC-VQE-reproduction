@@ -2,8 +2,8 @@
 
 experiment_setup:
   name: "GHZ_VQE_Experiment"
-  num_runs: 10
-  sample_rounds: 10
+  num_runs: 16
+  sample_rounds: 128
 
 quantum_model:
   num_qubits: 4
@@ -11,9 +11,8 @@ quantum_model:
   classical_network:
     type: "SimpleNN"
   hamiltonian:
-    parameters:
-      global_term: 1.0
-      perturb: 0.1
+    global_term: 4
+    perturb: 0.1
 
 optimizer_params:
   name: "Adam"

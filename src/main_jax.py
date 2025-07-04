@@ -44,14 +44,15 @@ def main(config_path="./configs/jax_config.yaml"):
     # 2. Build the Quantum Model from the config
     print("Building quantum model...")
     num_qubits = config['quantum_model']['num_qubits']
-    hamiltonian = partial(tc_energy, global_term = 16, perturb = 0.2)
-    reduced_hamiltonian = reduced_hamiltonian_GHZ(num_qubits, 16, 0.2)
+    hamiltonian = partial(tc_energy, global_term = config['quantum_model']['hamiltonian']['global_term'],
+                          perturb = config['quantum_model']['hamiltonian']['perturb']
+                          )
+    reduced_hamiltonian = reduced_hamiltonian_GHZ(num_qubits, config['quantum_model']['hamiltonian']['global_term'], config['quantum_model']['hamiltonian']['perturb'])
     root_key, subkey = make_batch_keys(root_key, batch_size)
     init_simple_net_vmap = jax.vmap(init_simple_net, in_axes=(0,None), out_axes=0)
     model = SimpleNet()
     unravel = get_unravel(num_qubits)
     params= init_simple_net_vmap(subkey, num_qubits)
-    unravel_vmap = jax.vmap(unravel, in_axes=(0,), out_axes=0)
     synd_net = syndrome_circuit_wrapper
     root_key, subkey = make_batch_keys(root_key, batch_size)
     init_syndrome_parameters_vmap = jax.vmap(init_syndrome_parameters, in_axes=(None, 0), out_axes=0)
@@ -111,15 +112,15 @@ def main(config_path="./configs/jax_config.yaml"):
                             sample_round=config['experiment_setup']['sample_rounds'],
                             input_key = subkey,
                              )
-            return (optimizer_state, updates, index, rootkey), (updates, index, min_energy, mean_energy, gd_var_theta1, gd_var_gamma)
+            return (optimizer_state, updates, index, rootkey), (index, min_energy, mean_energy, gd_var_theta1, gd_var_gamma)
         # Loop over the number of iterations
-        (opt_state, opt_params, _, _), (new_param, index, min_energy, mean_energy, gd_var_theta1, gd_var_gamma) = \
+        (opt_state, opt_params, _, _), (index, min_energy, mean_energy, gd_var_theta1, gd_var_gamma) = \
             jax.lax.scan(_body, (opt_state, opt_params, 0, subkey), jnp.arange(config['optimizer_params']['iterations']))
-        return new_param, index, min_energy, mean_energy, gd_var_theta1, gd_var_gamma
+        return index, min_energy, mean_energy, gd_var_theta1, gd_var_gamma
     run_training_jit = jax.jit(run_training_loop)
 
-    new_param, index, min_energy, mean_energy, gd_var_theta1, gd_var_gamma = run_training_jit(opt_state, opt_params)
-    print(f"Training completed after {index} iterations.")
+    index, min_energy, mean_energy, gd_var_theta1, gd_var_gamma = run_training_jit(opt_state, opt_params)
+    print(f"Training completed after {config['optimizer_params']['iterations']} iterations.")
     # 6. Save the results,
     print("Saving results...")
     end_time = time.time()
@@ -136,8 +137,6 @@ def main(config_path="./configs/jax_config.yaml"):
         'mean_energy': mean_energy,
         'final_gd_var_theta1': gd_var_theta1,
         'final_gd_var_gamma': gd_var_gamma,
-        'iterations': index,
-        'params': new_param
     }
 
 
