@@ -2,7 +2,7 @@
 
 experiment_setup:
   name: "GHZ_VQE_Experiment"
-  num_runs: 4
+  num_runs: 8
   sample_rounds: 128
 
 quantum_model:
@@ -11,13 +11,18 @@ quantum_model:
   classical_network:
     type: "SimpleNN"
   hamiltonian:
-    global_term: 4
+    global_term: 0
     perturb: 0.1
 
 optimizer_params:
   name: "Adam"
-  lr_theta1: 1.0e-3     # learning-rate for θ₁  (syndrome angles)
-  lr_gamma: 1.0e-6      # learning-rate for γ   (MLP weights)
-  iterations: 100
+  lr_theta1: 0.01    # learning-rate for θ₁  (syndrome angles)
+  lr_gamma: 0.0001      # learning-rate for γ   (MLP weights)
+  iterations: 1000
+  decay:
+    type: exponential      # 'exponential' | 'cosine' | 'none'
+    decay_rate: 0.9       # factor applied every `decay_steps`
+    decay_steps: 100       # how many weight-updates per decay
+    staircase: false       # true → stepwise, false → smooth
 
 

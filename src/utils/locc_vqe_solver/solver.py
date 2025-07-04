@@ -294,6 +294,9 @@ def train_step(
     optimizer: Any,
     optimizer_state: Any,
     rootkey: jax.random.PRNGKey = jax.random.PRNGKey(0),
+    ctype: jnp.dtype = jnp.complex128,
+    htype: jnp.dtype = jnp.float64,
+    ftype: jnp.dtype = jnp.float64,
 ):
     """
     Perform a single training step for the adaptive VQE.
@@ -310,6 +313,9 @@ def train_step(
         optimizer: optax.GradientTransformation, optimizer to use.
         optimizer_state: optax.OptState, state of the optimizer.
         rootkey: jax.random.PRNGKey, random key for sampling.
+        ctype: jnp.dtype, data type for complex numbers.
+        htype: jnp.dtype, data type for Hamiltonian.
+        ftype: jnp.dtype, data type for floating point numbers.
     Returns:
         updates: jnp.ndarray, the updates to apply to the model parameters.
         optimizer_state: optax.OptState, updated state of the optimizer.
@@ -328,6 +334,9 @@ def train_step(
         hamiltonian=hamiltonian,
         sample_round=sample_round,  # Assuming single round for simplicity
         input_key=subkey,  # Replace with actual key
+        ctype=ctype,
+        htype=htype,
+        ftype=ftype,
     )
     rootkey, subkey = jax.random.split(rootkey, 2)
     # Compute the gradient with respect to gamma
@@ -342,6 +351,9 @@ def train_step(
         hamiltonian=hamiltonian,
         sample_round=sample_round,  # Assuming single round for simplicity
         input_key=subkey,  # Replace with actual key
+        ctype=ctype,
+        htype=htype,
+        ftype=ftype,
     )
 
     # Combine parameters and gradients
@@ -356,11 +368,12 @@ def train_step(
     # Update the optimizer state
     update_vmap = jax.vmap(optimizer.update, in_axes=(0, 0, 0), out_axes=(0, 0))
     updates, optimizer_state = update_vmap(opt_grads, optimizer_state, opt_params)
+    new_params = optax.apply_updates(opt_params, updates)
     mean_grad_theta1 = jnp.mean(grad_theta_1)
     mean_grad_gamma = jnp.mean(grad_gamma)
     mean_grad_var_theta1 = jnp.mean(grad_var_theta1)
     mean_grad_var_gamma = jnp.mean(grad_var_gamma)
-    return updates, optimizer_state, mean_grad_var_theta1, mean_grad_var_gamma, mean_grad_theta1, mean_grad_gamma
+    return new_params, optimizer_state, mean_grad_var_theta1, mean_grad_var_gamma, mean_grad_theta1, mean_grad_gamma
 
 def energy_estimator(
         n_bits: int,

@@ -20,23 +20,41 @@ from problems.GHZ_tc import *
 from jax import numpy as jnp
 tc.set_backend("jax")
 
+def build_schedule(init_lr: float, dcfg: dict):
+    """Return either a float (no decay) or an Optax schedule."""
+    if dcfg["type"] == "exponential":
+        return optax.exponential_decay(
+            init_value       = init_lr,
+            transition_steps = dcfg["decay_steps"],
+            decay_rate       = dcfg["decay_rate"],
+            staircase        = dcfg.get("staircase", False),
+        )
+    elif dcfg["type"] == "cosine":
+        return optax.cosine_decay_schedule(
+            init_value       = init_lr,
+            decay_steps      = dcfg["decay_steps"],
+        )
+    else:                      # 'none'
+        return init_lr
 
-def make_multi_rate_tx(lr_theta1: float, lr_gamma: float) -> optax.GradientTransformation:
-    """Adam(lr_theta1) for θ₁ leaves, Adam(lr_gamma) for γ leaves."""
+def make_multi_rate_tx(lr_theta1: float,
+                       lr_gamma: float,
+                       decay_cfg: dict) -> optax.GradientTransformation:
+    """Adam with *independent* schedulers for θ₁ and γ leaves."""
+    # build schedules
+    sched_theta1 = build_schedule(lr_theta1, decay_cfg)
+    sched_gamma  = build_schedule(lr_gamma,  decay_cfg)
+
     transforms = {
-        "theta_1": optax.adamw(learning_rate=lr_theta1),
-        "gamma":   optax.adamw(learning_rate=lr_gamma,weight_decay=0.01),
-        "default": optax.adamw(learning_rate=lr_gamma),   # safeguard for stray leaves
+        "theta_1": optax.adam(learning_rate=sched_theta1),
+        "gamma":   optax.adam(learning_rate=sched_gamma),
+        "default": optax.adam(learning_rate=sched_gamma),  # safeguard
     }
 
-    # --- NEW: label_fn takes *params* and returns a label-PyTree -------------
     def label_fn(params):
         def _assign(path, _):
-            top = path[0]                  # ('theta_1', …), ('gamma', …)
-            if top in ("theta_1", "gamma"):
-                return top
-            return "default"
-        # tree_map_with_path walks the PyTree, giving (path, leaf) pairs
+            top = path[0]
+            return top if top in ("theta_1", "gamma") else "default"
         return jax.tree_util.tree_map_with_path(_assign, params)
 
     return optax.multi_transform(transforms, label_fn)
@@ -97,6 +115,7 @@ def main(config_path="./configs/jax_config.yaml"):
     optimizer = make_multi_rate_tx(
         lr_theta1=config["optimizer_params"]["lr_theta1"],
         lr_gamma=config["optimizer_params"]["lr_gamma"],
+        decay_cfg=config["optimizer_params"]["decay"],
     )
 
     init_vmap = jax.vmap(optimizer.init, in_axes=(0,), out_axes=0)
@@ -140,14 +159,14 @@ def main(config_path="./configs/jax_config.yaml"):
                             sample_round=config['experiment_setup']['sample_rounds'],
                             input_key = subkey,
                              )
-            return (optimizer_state, updates, index, rootkey), (index, min_energy, mean_energy, gd_var_theta1, gd_var_gamma, mean_grad_theta1, mean_grad_gamma)
+            return (optimizer_state, updates, index, rootkey), (index, updates, min_energy, mean_energy, gd_var_theta1, gd_var_gamma, mean_grad_theta1, mean_grad_gamma)
         # Loop over the number of iterations
-        (opt_state, opt_params, _, _), (index, min_energy, mean_energy, gd_var_theta1, gd_var_gamma, mean_grad_theta1, mean_grad_gamma) = \
+        (opt_state, opt_params, _, _), (index, updates, min_energy, mean_energy, gd_var_theta1, gd_var_gamma, mean_grad_theta1, mean_grad_gamma) = \
             jax.lax.scan(_body, (opt_state, opt_params, 0, subkey), jnp.arange(config['optimizer_params']['iterations']))
-        return index, min_energy, mean_energy, gd_var_theta1, gd_var_gamma, mean_grad_theta1, mean_grad_gamma
+        return index, updates, min_energy, mean_energy, gd_var_theta1, gd_var_gamma, mean_grad_theta1, mean_grad_gamma
     run_training_jit = jax.jit(run_training_loop)
 
-    index, min_energy, mean_energy, gd_var_theta1, gd_var_gamma, mean_grad_theta1, mean_grad_gamma = run_training_jit(opt_state, opt_params)
+    index, updates, min_energy, mean_energy, gd_var_theta1, gd_var_gamma, mean_grad_theta1, mean_grad_gamma = run_training_jit(opt_state, opt_params)
     print(f"Training completed after {config['optimizer_params']['iterations']} iterations.")
     # 6. Save the results,
     print("Saving results...")
@@ -167,6 +186,7 @@ def main(config_path="./configs/jax_config.yaml"):
         'final_gd_var_theta1': gd_var_theta1,
         'grad_gamma': mean_grad_gamma,
         'final_gd_var_gamma': gd_var_gamma,
+        # 'params': updates
     }
 
 
