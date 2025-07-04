@@ -1,4 +1,4 @@
 
-from . import GHZ_tc
+from . import GHZ
 
-__all__ = ["GHZ_tc"]
+__all__ = ["GHZ"]

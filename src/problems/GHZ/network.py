@@ -75,47 +75,56 @@ def unitary_block(circuit: tc.Circuit, n_bits:int, theta: jax.Array) -> tc.Circu
         su4(circuit, i, i + 1, theta[i])
     return circuit
 
-def unitary_vqe_circuit(n_bits: int, p0: jax.Array, p1: jax.Array) -> tc.Circuit:
+
+
+def unitary_vqe_circuit(params: jax.Array, n_bits: int) -> tc.Circuit:
     """
     Create a VQE circuit with a unitary block applied to the first n_bits qubits.
 
     Args:
         n_bits (int): The number of bits (qubits) in the circuit.
-        p0 (jax.Array): A 1D array of shape (n_bits - 1, 5, 3) containing the parameters for the SU(4) gates.
+        params
 
     Returns:
         tc.Circuit: The quantum circuit with the unitary block applied.
     """
+    p0_shape = (n_bits - 1, 5, 3)
+    p0_size = math.prod(p0_shape)
+
+    p2_shape = (n_bits, 3)
+
+    # Slice the flat vector
+    p0_flat = params[:p0_size]
+    p1_flat = params[p0_size:2*p0_size]
+    p2_flat = params[2*p0_size:]
+
+    # Reshape and return
+    p0 = p0_flat.reshape(p0_shape)
+    p1 = p1_flat.reshape(p0_shape)
+    p2 = p2_flat.reshape(p2_shape)
+
     circuit = tc.Circuit(n_bits)
     for i in range(n_bits):
         circuit.h(i)
     unitary_block(circuit, n_bits, p0)
+    unitary_block(circuit, n_bits, p1)
 
     # Apply a final layer of rotations to all qubits
     for i in range(n_bits):
-        circuit.rx(i, theta=p1[i, 0])
-        circuit.ry(i, theta=p1[i, 1])
-        circuit.rz(i, theta=p1[i, 2])
+        circuit.rx(i, theta=p2[i, 0])
+        circuit.ry(i, theta=p2[i, 1])
+        circuit.rz(i, theta=p2[i, 2])
 
     return circuit
 
-def get_unitary_vqe_params(n_bits: int) -> int:
-    """
-    Calculate the total number of trainable parameters for the unitary VQE circuit.
+def init_unitary_vqe_param(n_bits:int, randkey: Any) -> jax.Array:
+    p0_shape = (n_bits - 1, 5, 3)
+    p0_size = jnp.prod(jnp.array(p0_shape))  # More robust way to calculate size
 
-    Args:
-        n_bits (int): The number of bits (qubits) in the circuit.
-
-    Returns:
-        int: The total number of parameters.
-    """
-    if n_bits < 2:
-        return 0
-    # Each SU(4) gate has 15 parameters, and there are (n_bits - 1) such gates
-    su4_params = (n_bits - 1) * 15
-    # Each qubit has 3 additional rotation parameters
-    rotation_params = n_bits * 3
-    return su4_params + rotation_params
+    p1_shape = (n_bits, 3)
+    p1_size = jnp.prod(jnp.array(p1_shape))
+    total_params = int(2 * p0_size + p1_size)
+    return jax.random.uniform(randkey, shape=(total_params,), minval=-jnp.pi, maxval=jnp.pi)
 
 def long_range_block(n_bits: int, thetas: jax.Array, max_stride: int | None = None) -> tc.Circuit:
     """

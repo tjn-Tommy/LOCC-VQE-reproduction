@@ -15,8 +15,8 @@ import problems
 import tensorcircuit as tc
 import numpy as np
 # Our project-specific imports
-from utils import ground_truth_solver
-from utils.locc_vqe_solver import *
+from utils import ground_truth_solver, make_batch_keys
+from utils.unitary_vqe import *
 from problems.GHZ import *
 from jax import numpy as jnp
 tc.set_backend("jax")
@@ -38,29 +38,26 @@ def build_schedule(init_lr: float, dcfg: dict):
     else:                      # 'none'
         return init_lr
 
-def make_multi_rate_tx(lr_theta1: float,
-                       lr_gamma: float,
+def make_multi_rate_tx(lr_params: float,
                        decay_cfg: dict) -> optax.GradientTransformation:
     """Adam with *independent* schedulers for θ₁ and γ leaves."""
     # build schedules
-    sched_theta1 = build_schedule(lr_theta1, decay_cfg)
-    sched_gamma  = build_schedule(lr_gamma,  decay_cfg)
+    sched_params = build_schedule(lr_params, decay_cfg)
 
     transforms = {
-        "theta_1": optax.adam(learning_rate=sched_theta1),
-        "gamma":   optax.adam(learning_rate=sched_gamma),
-        "default": optax.adam(learning_rate=sched_gamma),  # safeguard
+        "params": optax.adam(learning_rate=sched_params),
+        "default": optax.adam(learning_rate=sched_params),  # safeguard
     }
 
     def label_fn(params):
         def _assign(path, _):
             top = path[0]
-            return top if top in ("theta_1", "gamma") else "default"
+            return top if top in ("params",) else "default"
         return jax.tree_util.tree_map_with_path(_assign, params)
 
     return optax.multi_transform(transforms, label_fn)
 
-def main(config_path="./configs/jax_config.yaml"):
+def main(config_path="./configs/uvqe_config.yaml"):
     """
     Main function to run a VQE experiment based on a config file.
     """
@@ -68,16 +65,6 @@ def main(config_path="./configs/jax_config.yaml"):
     start_time = time.time()
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
-
-    # 2) build the import path
-    #    e.g. "problems.GHZ.network"
-    # path = f"problems.{config['quantum_model']['problem']}"
-    # 3) import the module
-    # mod = importlib.import_module(path)
-    # 4) grab the class (or function) by name
-    # Cls = getattr(mod, cfg["class"])
-    # 5) instantiate / call it
-    # instance = Cls(...)
 
     exp_name = config['experiment_setup']['name']
     batch_size = config['experiment_setup']['num_runs']
@@ -91,17 +78,10 @@ def main(config_path="./configs/jax_config.yaml"):
                           perturb = config['quantum_model']['hamiltonian']['perturb']
                           )
     reduced_hamiltonian = reduced_hamiltonian_GHZ(num_qubits, config['quantum_model']['hamiltonian']['global_term'], config['quantum_model']['hamiltonian']['perturb'])
+    quantum_net = partial(unitary_vqe_circuit,n_bits = num_qubits)
     root_key, subkey = make_batch_keys(root_key, batch_size)
-    init_simple_net_vmap = jax.vmap(init_simple_net, in_axes=(0,None), out_axes=0)
-    model = SimpleNet()
-    unravel = get_unravel(num_qubits)
-    params= init_simple_net_vmap(subkey, num_qubits)
-    synd_net = syndrome_circuit_wrapper
-    root_key, subkey = make_batch_keys(root_key, batch_size)
-    init_syndrome_parameters_vmap = jax.vmap(init_syndrome_parameters, in_axes=(None, 0), out_axes=0)
-    synd_params = init_syndrome_parameters_vmap(num_qubits, subkey)
-    corr_net = post_sample_correction
-
+    init_parameters_vmap = jax.vmap(init_unitary_vqe_param, in_axes=(None, 0), out_axes=0)
+    params = init_parameters_vmap(num_qubits, subkey)
 
     print(f"Loaded Hamiltonian: '{reduced_hamiltonian.to_list()}'")
     exact_energy = ground_truth_solver(reduced_hamiltonian)
@@ -110,64 +90,49 @@ def main(config_path="./configs/jax_config.yaml"):
     # 4. Prepare and Configure the Trainer
     print("Configuring the trainer...")
     opt_params = {
-        'theta_1': synd_params.astype(jnp.float64),
-        'gamma': params.astype(jnp.float64)
+        'params': params,
     }
+
     optimizer = make_multi_rate_tx(
-        lr_theta1=float(config["optimizer_params"]["lr_theta1"]),
-        lr_gamma=float(config["optimizer_params"]["lr_gamma"]),
+        lr_params=config["optimizer_params"]["learning_rate"],
         decay_cfg=config["optimizer_params"]["decay"],
     )
 
     init_vmap = jax.vmap(optimizer.init, in_axes=(0,), out_axes=0)
     opt_state = init_vmap(opt_params)
     train_step_partial = partial(train_step,
-                                     model=model,
-                                     unravel = unravel,
                                      n_bits=num_qubits,
-                                     synd=synd_net,
-                                     corr=corr_net,
+                                     circ=quantum_net,
                                      hamiltonian=hamiltonian,
-                                     sample_round=config['experiment_setup']['sample_rounds'],
                                      optimizer=optimizer,
                                      )
     print("Trainer configured successfully.")
     # 5. Run the Training Loop
     print(f"Starting training for {config['optimizer_params']['iterations']} iterations...")
-    root_key, subkey = jax.random.split(root_key, 2)
     def run_training_loop(opt_state, opt_params):
         def _body(carry, idx):
-            opt_state, opt_params, index, rootkey = carry
+            opt_state, opt_params, index= carry
             index += 1
             # Run the training step
-            rootkey, subkey = jax.random.split(rootkey, 2)
-            updates, optimizer_state, gd_var_theta1, gd_var_gamma, mean_grad_theta1, mean_grad_gamma = train_step_partial(
-                                theta_1 = opt_params['theta_1'],
-                                gamma =opt_params['gamma'],
+            updates, optimizer_state, mean_grad_params = train_step_partial(
+                                params = opt_params['params'],
                                 optimizer_state = opt_state,
-                                rootkey = subkey,
                                         )
-            rootkey, subkey = jax.random.split(rootkey, 2)
             min_energy, mean_energy \
-                = energy_estimator(model=model,
-                            unravel = unravel,
+                = energy_estimator(
                             n_bits=num_qubits,
-                            synd=synd_net,
-                            theta_1_batched=updates['theta_1'],
-                            corr=corr_net,
-                            gamma_batched=updates['gamma'],
+                            circ= quantum_net,
+                            params=opt_params['params'],
                             hamiltonian=hamiltonian,
-                            sample_round=config['experiment_setup']['sample_rounds'],
-                            input_key = subkey,
                              )
-            return (optimizer_state, updates, index, rootkey), (index, updates, min_energy, mean_energy, gd_var_theta1, gd_var_gamma, mean_grad_theta1, mean_grad_gamma)
+            return (optimizer_state, updates, index), (index, updates, min_energy, mean_energy, mean_grad_params)
         # Loop over the number of iterations
-        (opt_state, opt_params, _, _), (index, updates, min_energy, mean_energy, gd_var_theta1, gd_var_gamma, mean_grad_theta1, mean_grad_gamma) = \
-            jax.lax.scan(_body, (opt_state, opt_params, 0, subkey), jnp.arange(config['optimizer_params']['iterations']))
-        return index, updates, min_energy, mean_energy, gd_var_theta1, gd_var_gamma, mean_grad_theta1, mean_grad_gamma
+        (opt_state, opt_params, _), (index, updates, min_energy, mean_energy, mean_grad_params) = \
+            jax.lax.scan(_body, (opt_state, opt_params, 0), jnp.arange(config['optimizer_params']['iterations']))
+        return index, updates, min_energy, mean_energy, mean_grad_params
     run_training_jit = jax.jit(run_training_loop)
 
-    index, updates, min_energy, mean_energy, gd_var_theta1, gd_var_gamma, mean_grad_theta1, mean_grad_gamma = run_training_jit(opt_state, opt_params)
+    index, updates, min_energy, mean_energy, mean_grad_params = run_training_jit(opt_state, opt_params)
     print(f"Training completed after {config['optimizer_params']['iterations']} iterations.")
     # 6. Save the results,
     print("Saving results...")
@@ -183,10 +148,7 @@ def main(config_path="./configs/jax_config.yaml"):
         'final_min_energy': minimum_energy,
         'min_energy': min_energy,
         'mean_energy': mean_energy,
-        'grad_theta1': mean_grad_theta1,
-        'final_gd_var_theta1': gd_var_theta1,
-        'grad_gamma': mean_grad_gamma,
-        'final_gd_var_gamma': gd_var_gamma,
+        'mean_grad': mean_grad_params,
         # 'params': updates
     }
 
@@ -216,8 +178,6 @@ def main(config_path="./configs/jax_config.yaml"):
     # 7. Plot the results
     it = np.array(index)
     min_e = np.array(min_energy)
-    var_t1 = np.array(gd_var_theta1)
-    var_g = np.array(gd_var_gamma)
     exact_e = float(exact_energy)  # scalar
 
     # 1) Min energy vs. iteration
@@ -231,20 +191,7 @@ def main(config_path="./configs/jax_config.yaml"):
     plt.savefig(os.path.join(out_dir, 'min_energy_plot.png'))
     plt.show()
 
-    # 2) Gradient variances vs. iteration
-    plt.figure()
-    plt.plot(it, var_t1, marker='o', label='Var(θ1)')
-    plt.plot(it, var_g, marker='x', label='Var(γ)')
-    plt.xlabel('Iteration')
-    plt.ylabel('Gradient Variance')
-    plt.title(f'{exp_name}: Gradient Variance per Iteration')
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, 'grad_var_plot.png'))
-    plt.show()
-
-    # 3) Difference between exact energy and min energy
+    # 2) Difference between exact energy and min energy
     diff_e = exact_e - min_e  # vector of differences
 
     plt.figure()
@@ -258,12 +205,10 @@ def main(config_path="./configs/jax_config.yaml"):
     plt.show()
     print(f"--- Experiment '{exp_name}' Finished ---")
 
-    # 4) Mean gradient vs. iteration
-    mean_grad_t1 = np.array(mean_grad_theta1)
-    mean_grad_g = np.array(mean_grad_gamma)
+    # 3) Mean gradient vs. iteration
+    mean_grad_t1 = np.array(mean_grad_params)
     plt.figure()
-    plt.plot(it, mean_grad_t1, marker='o', label='Mean Grad(θ1)')
-    plt.plot(it, mean_grad_g, marker='x', label='Mean Grad(γ)')
+    plt.plot(it, mean_grad_t1, marker='o', label='Mean Grad')
     plt.xlabel('Iteration')
     plt.ylabel('Mean Gradient')
     plt.title(f'{exp_name}: Mean Gradient per Iteration')
