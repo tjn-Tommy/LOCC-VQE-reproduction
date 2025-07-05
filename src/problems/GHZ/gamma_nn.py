@@ -10,12 +10,12 @@ tc.set_backend("jax")
 class SimpleNet(nn.Module):
     @nn.compact
     def __call__(self, x):
-        out = nn.Dense(features=12)(x)
-        x = nn.Dense(features=64)(x)
+        out = nn.Dense(features=18)(x)
+        x = nn.Dense(features=96)(x)
         x = nn.relu(x)
-        x = nn.Dense(features=64)(x)
+        x = nn.Dense(features=96)(x)
         x = nn.relu(x)
-        x = nn.Dense(features=12)(x)
+        x = nn.Dense(features=18)(x)
         x = x + out  # residual connection
         x = nn.tanh(x)
         x = x * jnp.pi

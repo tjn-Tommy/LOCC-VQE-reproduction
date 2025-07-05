@@ -1,7 +1,4 @@
 from collections.abc import Callable
-from jax import config
-# Must happen before any JAX imports
-config.update("jax_enable_x64", True)
 import flax.linen as nn
 import tensorcircuit as tc
 import jax
@@ -25,12 +22,12 @@ def adaptive_vqe_factory(
                  projector_onehot: jnp.ndarray,
                  sample_cond_prob: jnp.ndarray,
                  n: int,
-                 synd: Callable[[tc.Circuit, int, jnp.ndarray], tc.Circuit],
+                 synd: Callable[[int, jnp.ndarray], tc.Circuit],
                  corr: Callable[[tc.Circuit, int, jnp.ndarray], tc.Circuit],
 
                  hamiltonian: Callable[[tc.Circuit, int], jnp.ndarray],
-                 ctype: jnp.dtype = jnp.complex128,
-                 htype: jnp.dtype = jnp.float64,
+                 ctype: jnp.dtype = jnp.complex64,
+                 htype: jnp.dtype = jnp.float32,
                  ) -> jnp.ndarray:
     """
     n_bits:      number of system qubits
@@ -82,9 +79,9 @@ def grad_theta_1_paramshift_sample(
         hamiltonian: Callable[[tc.Circuit, int], jnp.ndarray],
         sample_round: int,
         input_key: jax.random.PRNGKey,
-        ctype: jnp.dtype = jnp.complex128,
-        htype: jnp.dtype = jnp.float64,
-        ftype: jnp.dtype = jnp.float64,
+        ctype: jnp.dtype = jnp.complex64,
+        htype: jnp.dtype = jnp.float32,
+        ftype: jnp.dtype = jnp.float32,
 ):
 
     # --------------------- 1. factory for helper functions -------------------
@@ -109,7 +106,7 @@ def grad_theta_1_paramshift_sample(
     # build parameter-shifted theta_1
     theta_1_full = jnp.tile( theta_1_batched[:, None, None, :], (1, sample_round, theta1_num, 1)).astype(ftype) # (batch_size, sample_round, θ₁_num, θ₁_num)
 
-    shift_tensor = (jnp.pi / 2) * jnp.eye(theta1_num, dtype=jnp.float64)
+    shift_tensor = (jnp.pi / 2) * jnp.eye(theta1_num, dtype=ftype)
     shift_tensor = jnp.tile( shift_tensor[None, None, :, :], (batch_size, sample_round, 1, 1)) # (batch_size, sample_round, θ₁_num, θ₁_num)
 
     # ---- 3. Compute the energy using parameter-shift rule -----------------------
@@ -290,7 +287,8 @@ def train_step(
     corr: Callable[[tc.Circuit, int, jnp.ndarray], tc.Circuit],
     hamiltonian: Callable[[tc.Circuit, int], jnp.ndarray],
     gamma: jnp.ndarray,
-    sample_round: int,
+    theta1_sample_round: int,
+    gamma_sample_round: int,
     optimizer: Any,
     optimizer_state: Any,
     rootkey: jax.random.PRNGKey = jax.random.PRNGKey(0),
@@ -332,8 +330,8 @@ def train_step(
         model=model,
         gamma_batched=gamma,
         hamiltonian=hamiltonian,
-        sample_round=sample_round,  # Assuming single round for simplicity
-        input_key=subkey,  # Replace with actual key
+        sample_round=theta1_sample_round,
+        input_key=subkey,
         ctype=ctype,
         htype=htype,
         ftype=ftype,
@@ -349,8 +347,8 @@ def train_step(
         model=model,
         gamma_batched=gamma,
         hamiltonian=hamiltonian,
-        sample_round=sample_round,  # Assuming single round for simplicity
-        input_key=subkey,  # Replace with actual key
+        sample_round=gamma_sample_round,
+        input_key=subkey,
         ctype=ctype,
         htype=htype,
         ftype=ftype,
@@ -369,8 +367,8 @@ def train_step(
     update_vmap = jax.vmap(optimizer.update, in_axes=(0, 0, 0), out_axes=(0, 0))
     updates, optimizer_state = update_vmap(opt_grads, optimizer_state, opt_params)
     new_params = optax.apply_updates(opt_params, updates)
-    mean_grad_theta1 = jnp.mean(grad_theta_1)
-    mean_grad_gamma = jnp.mean(grad_gamma)
+    mean_grad_theta1 = jnp.mean(jnp.abs(grad_theta_1))
+    mean_grad_gamma = jnp.mean(jnp.abs(grad_gamma))
     mean_grad_var_theta1 = jnp.mean(grad_var_theta1)
     mean_grad_var_gamma = jnp.mean(grad_var_gamma)
     return new_params, optimizer_state, mean_grad_var_theta1, mean_grad_var_gamma, mean_grad_theta1, mean_grad_gamma

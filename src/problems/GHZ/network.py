@@ -46,12 +46,12 @@ def su4(circuit: tc.Circuit, qubit_1:int, qubit_2:int, theta: jax.Array) -> tc.C
     circuit.rxx(qubit_1, qubit_2, theta=theta[2, 0])
     circuit.ryy(qubit_1, qubit_2, theta=theta[2, 1])
     circuit.rzz(qubit_1, qubit_2, theta=theta[2, 2])
-    circuit.rx(qubit_1, theta=theta[3, 0])
-    circuit.ry(qubit_1, theta=theta[3, 1])
-    circuit.rz(qubit_1, theta=theta[3, 2])
-    circuit.rx(qubit_2, theta=theta[4, 0])
-    circuit.ry(qubit_2, theta=theta[4, 1])
-    circuit.rz(qubit_2, theta=theta[4, 2])
+    #circuit.rx(qubit_1, theta=theta[3, 0])
+    #circuit.ry(qubit_1, theta=theta[3, 1])
+    #circuit.rz(qubit_1, theta=theta[3, 2])
+    #circuit.rx(qubit_2, theta=theta[4, 0])
+    #circuit.ry(qubit_2, theta=theta[4, 1])
+    #circuit.rz(qubit_2, theta=theta[4, 2])
     return circuit
 
 
@@ -107,7 +107,6 @@ def unitary_vqe_circuit(params: jax.Array, n_bits: int) -> tc.Circuit:
     for i in range(n_bits):
         circuit.h(i)
     unitary_block(circuit, n_bits, p0)
-    unitary_block(circuit, n_bits, p1)
 
     # Apply a final layer of rotations to all qubits
     for i in range(n_bits):

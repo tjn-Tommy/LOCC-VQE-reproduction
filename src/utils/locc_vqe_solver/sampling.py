@@ -1,7 +1,4 @@
 from collections.abc import Callable
-from jax import config
-# Must happen before any JAX imports
-config.update("jax_enable_x64", True)
 import tensorcircuit as tc
 import jax
 import jax.numpy as jnp
@@ -13,7 +10,7 @@ def get_prob(n: int,
              theta_1: jax.Array,
              projector_onehot: jax.Array,
              prob_idx: int,
-             ctype: jnp.dtype = jnp.complex128) -> jax.Array:
+             ctype: jnp.dtype = jnp.complex64) -> jax.Array:
     """
     n_bits: number of system qubits
     generator: function that builds the base circuit
@@ -58,7 +55,8 @@ def sample_factory(
     theta_1: jax.Array,
     generator: Callable[[int, jax.Array], "tc.Circuit"],
     n_bits: int,
-    ftype: jnp.dtype = jnp.float64
+    ftype: jnp.dtype = jnp.float32,
+    ctype: jnp.dtype = jnp.complex64,
 ) -> tuple[jax.Array, jax.Array]:
     # initialise projector state: 2 denotes identity (no measurement yet)
     projector_init = 2 * jnp.ones((n_bits,), dtype=ftype)
@@ -75,7 +73,7 @@ def sample_factory(
         expect_vec = jnp.zeros(n_bits, dtype=ftype)
         for j in range(n_bits):
             expect_vec = expect_vec.at[j].set(
-                get_prob(n_bits, generator, theta_1, proj_onehot, j)
+                get_prob(n_bits, generator, theta_1, proj_onehot, j, ctype)
             )
 
         expect_z_raw = expect_vec[idx]

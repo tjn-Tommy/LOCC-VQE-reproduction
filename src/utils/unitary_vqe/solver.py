@@ -1,8 +1,7 @@
 from collections.abc import Callable
 from jax import config
-# Must happen before any JAX imports
-config.update("jax_enable_x64", True)
 import flax.linen as nn
+#config.update("jax_enable_x64", True)  # Enable 64-bit precision for JAX
 import tensorcircuit as tc
 import jax
 import jax.numpy as jnp
@@ -22,8 +21,8 @@ def uvqe_factory(
                  n: int,
                  circ: Callable[[jnp.ndarray], tc.Circuit],
                  hamiltonian: Callable[[tc.Circuit, int], jnp.ndarray],
-                 ctype: jnp.dtype = jnp.complex128,
-                 htype: jnp.dtype = jnp.float64,
+                 ctype: jnp.dtype = jnp.complex64,
+                 htype: jnp.dtype = jnp.float32,
                  ) -> jnp.ndarray:
     """
     Factory function to create the adaptive VQE circuit and compute the energy.
@@ -91,9 +90,9 @@ def train_step(
     hamiltonian: Callable[[tc.Circuit, int], jnp.ndarray],
     optimizer: Any,
     optimizer_state: Any,
-    ctype: jnp.dtype = jnp.complex128,
-    htype: jnp.dtype = jnp.float64,
-    ftype: jnp.dtype = jnp.float64,
+    ctype: jnp.dtype = jnp.complex64,
+    htype: jnp.dtype = jnp.float32,
+    ftype: jnp.dtype = jnp.float32,
 ):
     """
     Perform a single training step for the adaptive VQE.
@@ -139,7 +138,7 @@ def train_step(
     update_vmap = jax.vmap(optimizer.update, in_axes=(0, 0, 0), out_axes=(0, 0))
     updates, optimizer_state = update_vmap(opt_grads, optimizer_state, opt_params)
     new_params = optax.apply_updates(opt_params, updates)
-    mean_grad_theta1 = jnp.mean(grad_params)
+    mean_grad_theta1 = jnp.mean(jnp.abs(grad_params))
     return new_params, optimizer_state, mean_grad_theta1
 
 def energy_estimator(
@@ -147,9 +146,9 @@ def energy_estimator(
         circ: Callable[[jnp.ndarray], tc.Circuit],
         params: jnp.ndarray,
         hamiltonian: Callable[[tc.Circuit, int], jnp.ndarray],
-        ctype: jnp.dtype = jnp.complex128,
-        htype: jnp.dtype = jnp.float64,
-        ftype: jnp.dtype = jnp.float64,
+        ctype: jnp.dtype = jnp.complex64,
+        htype: jnp.dtype = jnp.float32,
+        ftype: jnp.dtype = jnp.float32,
 ):
 
     # --------------------- 1. factory for helper functions -------------------

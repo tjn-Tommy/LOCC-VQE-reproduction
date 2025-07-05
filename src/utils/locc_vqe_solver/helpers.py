@@ -1,7 +1,4 @@
 from collections.abc import Callable
-from jax import config
-# Must happen before any JAX imports
-config.update("jax_enable_x64", True)
 import flax.linen as nn
 import tensorcircuit as tc
 import jax

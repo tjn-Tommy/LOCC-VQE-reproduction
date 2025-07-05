@@ -6,20 +6,24 @@ experiment_setup:
   sample_rounds: 128
 
 quantum_model:
-  num_qubits: 4
+  num_qubits: 6
   problem: "GHZ"
   hamiltonian:
-    global_term: 0
+    global_term: 4
     perturb: 0.1
 
 optimizer_params:
   name: "Adam"
-  learning_rate: 0.01
-  iterations: 2000
+  learning_rate: 0.02
+  iterations: 200
   decay:
     type: exponential      # 'exponential' | 'cosine' | 'none'
     decay_rate: 0.9       # factor applied every `decay_steps`
     decay_steps: 100       # how many weight-updates per decay
     staircase: false       # true → stepwise, false → smooth
 
+precision:
+  complex: complex64
+  float: float32
+  energy: float32
 

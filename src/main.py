@@ -3,7 +3,7 @@ import os
 #os.environ["JAX_TRACEBACK_FILTERING"] = "off"
 from jax import config
 # Must happen before any JAX imports
-config.update("jax_enable_x64", True)
+#config.update("jax_enable_x64", True)
 import jax
 import yaml
 import time
@@ -90,6 +90,9 @@ def main(config_path="./configs/jax_config.yaml"):
     hamiltonian = partial(tc_energy, global_term = config['quantum_model']['hamiltonian']['global_term'],
                           perturb = config['quantum_model']['hamiltonian']['perturb']
                           )
+    ctype = jnp.dtype(dtype = config['precision']['complex'])
+    ftype = jnp.dtype(dtype = config['precision']['float'])
+    htype = jnp.dtype(dtype = config['precision']['energy'])
     reduced_hamiltonian = reduced_hamiltonian_GHZ(num_qubits, config['quantum_model']['hamiltonian']['global_term'], config['quantum_model']['hamiltonian']['perturb'])
     root_key, subkey = make_batch_keys(root_key, batch_size)
     init_simple_net_vmap = jax.vmap(init_simple_net, in_axes=(0,None), out_axes=0)
@@ -110,8 +113,8 @@ def main(config_path="./configs/jax_config.yaml"):
     # 4. Prepare and Configure the Trainer
     print("Configuring the trainer...")
     opt_params = {
-        'theta_1': synd_params.astype(jnp.float64),
-        'gamma': params.astype(jnp.float64)
+        'theta_1': synd_params.astype(ftype),
+        'gamma': params.astype(ftype)
     }
     optimizer = make_multi_rate_tx(
         lr_theta1=float(config["optimizer_params"]["lr_theta1"]),
@@ -128,8 +131,12 @@ def main(config_path="./configs/jax_config.yaml"):
                                      synd=synd_net,
                                      corr=corr_net,
                                      hamiltonian=hamiltonian,
-                                     sample_round=config['experiment_setup']['sample_rounds'],
+                                     theta1_sample_round=config['experiment_setup']['theta1_sample_rounds'],
+                                    gamma_sample_round=config['experiment_setup']['gamma_sample_rounds'],
                                      optimizer=optimizer,
+                                        ctype=ctype,
+                                        ftype=ftype,
+                                        htype=htype,
                                      )
     print("Trainer configured successfully.")
     # 5. Run the Training Loop
@@ -157,8 +164,11 @@ def main(config_path="./configs/jax_config.yaml"):
                             corr=corr_net,
                             gamma_batched=updates['gamma'],
                             hamiltonian=hamiltonian,
-                            sample_round=config['experiment_setup']['sample_rounds'],
+                            sample_round=config['experiment_setup']['energy_sample_rounds'],
                             input_key = subkey,
+                            ctype= ctype,
+                            ftype= ftype,
+                            htype= htype,
                              )
             return (optimizer_state, updates, index, rootkey), (index, updates, min_energy, mean_energy, gd_var_theta1, gd_var_gamma, mean_grad_theta1, mean_grad_gamma)
         # Loop over the number of iterations

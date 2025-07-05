@@ -1,9 +1,7 @@
 from functools import partial
 import os
 #os.environ["JAX_TRACEBACK_FILTERING"] = "off"
-from jax import config
-# Must happen before any JAX imports
-config.update("jax_enable_x64", True)
+
 import jax
 import yaml
 import time

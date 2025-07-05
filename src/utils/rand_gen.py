@@ -1,6 +1,4 @@
-from jax import config
-# Must happen before any JAX imports
-config.update("jax_enable_x64", True)
+
 import jax
 from typing import Any
 
