@@ -39,21 +39,21 @@ def hamiltonian_GHZ(n: int, global_term: float, perturb: float = 0.0) -> SparseP
     coeff_z = -perturb / n
     for i in range(n):
         z_pauli = ['I'] * n + ['I'] * n  # Z terms on first n_bits qubits
-        z_pauli[n - 1 - i] = 'Z'
+        z_pauli[n - 1 - i] = 'X'
         pauli_list.append("".join(z_pauli))
         coeff_list.append(coeff_z)
 
     return SparsePauliOp(pauli_list, coeffs=coeff_list)
 
-def tc_energy(circuit: tc.Circuit, n_bits:int, global_term: float, perturb: float = 0.0):
+def tc_energy(circuit: tc.Circuit, n_bits:int, global_term: float, perturb: float = 0.0, ctype: jnp.dtype = jnp.complex64):
     e = 0.0
-    coeff_zz = - (1 - perturb) / n_bits
-    coeff_x = - (global_term - perturb) / n_bits
-    coeff_z = - perturb / n_bits
+    coeff_zz = jnp.astype(- (1 - perturb) / n_bits, ctype)
+    coeff_x = jnp.astype(- (global_term - perturb) / n_bits, ctype)
+    coeff_z = jnp.astype(- perturb / n_bits, ctype)
     for i in range(n_bits - 1):
         e += coeff_zz * circuit.expectation_ps(z=[i, i + 1])  # <Z_iZ_{i+1}>
-    for i in range(n_bits - 1):  # OBC
-        e += coeff_z * circuit.expectation_ps(z=[i])  # <Z_i>    
+    for i in range(n_bits):  # OBC
+        e += coeff_z * circuit.expectation_ps(x=[i])  # <Z_i>
     e += coeff_x * circuit.expectation_ps(x=list(range(n_bits)))  # <X_1 X_2 ... X_n>
     return jnp.real(e)
 
@@ -95,7 +95,7 @@ def reduced_hamiltonian_GHZ(n: int, global_term: float, perturb: float = 0.0) ->
     coeff_z = -perturb / n
     for i in range(n):
         z_pauli = ['I'] * n
-        z_pauli[n - 1 - i] = 'Z'
+        z_pauli[n - 1 - i] = 'X'
         pauli_list.append("".join(z_pauli))
         coeff_list.append(coeff_z)
 

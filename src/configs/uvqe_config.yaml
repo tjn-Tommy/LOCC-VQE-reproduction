@@ -2,23 +2,24 @@
 
 experiment_setup:
   name: "GHZ_UVQE_Experiment"
-  num_runs: 8
+  num_runs: 4
   sample_rounds: 128
+  seed: 42
 
 quantum_model:
-  num_qubits: 6
+  num_qubits: 4
   problem: "GHZ"
   hamiltonian:
-    global_term: 4
+    global_term: 8
     perturb: 0.1
 
 optimizer_params:
   name: "Adam"
-  learning_rate: 0.02
-  iterations: 200
+  learning_rate: 0.01
+  iterations: 1000
   decay:
     type: exponential      # 'exponential' | 'cosine' | 'none'
-    decay_rate: 0.9       # factor applied every `decay_steps`
+    decay_rate: 0.95       # factor applied every `decay_steps`
     decay_steps: 100       # how many weight-updates per decay
     staircase: false       # true → stepwise, false → smooth
 

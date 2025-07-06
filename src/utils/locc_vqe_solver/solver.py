@@ -175,9 +175,9 @@ def grad_gamma_batched(
         hamiltonian: Callable[[tc.Circuit, int], jnp.ndarray],
         sample_round: int,
         input_key: Any,
-        ctype: jnp.dtype = jnp.complex128,
-        htype: jnp.dtype = jnp.float64,
-        ftype: jnp.dtype = jnp.float64,
+        ctype: jnp.dtype = jnp.complex64,
+        htype: jnp.dtype = jnp.float32,
+        ftype: jnp.dtype = jnp.float32,
 ):
     """
     Compute the gradient of the energy with respect to theta_2 using parameter-shift rule.
@@ -292,9 +292,9 @@ def train_step(
     optimizer: Any,
     optimizer_state: Any,
     rootkey: jax.random.PRNGKey = jax.random.PRNGKey(0),
-    ctype: jnp.dtype = jnp.complex128,
-    htype: jnp.dtype = jnp.float64,
-    ftype: jnp.dtype = jnp.float64,
+    ctype: jnp.dtype = jnp.complex64,
+    htype: jnp.dtype = jnp.float32,
+    ftype: jnp.dtype = jnp.float32,
 ):
     """
     Perform a single training step for the adaptive VQE.

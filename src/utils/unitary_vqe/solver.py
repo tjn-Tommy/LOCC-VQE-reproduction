@@ -1,7 +1,5 @@
 from collections.abc import Callable
 from jax import config
-import flax.linen as nn
-#config.update("jax_enable_x64", True)  # Enable 64-bit precision for JAX
 import tensorcircuit as tc
 import jax
 import jax.numpy as jnp
@@ -46,9 +44,9 @@ def grad_params_paramshift(
         circ: Callable[[jnp.ndarray], tc.Circuit],
         params: jnp.ndarray,
         hamiltonian: Callable[[tc.Circuit, int], jnp.ndarray],
-        ctype: jnp.dtype = jnp.complex128,
-        htype: jnp.dtype = jnp.float64,
-        ftype: jnp.dtype = jnp.float64,
+        ctype: jnp.dtype = jnp.complex64,
+        htype: jnp.dtype = jnp.float32,
+        ftype: jnp.dtype = jnp.float32,
 ):
 
     # --------------------- 1. factory for helper functions -------------------

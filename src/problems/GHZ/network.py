@@ -46,12 +46,12 @@ def su4(circuit: tc.Circuit, qubit_1:int, qubit_2:int, theta: jax.Array) -> tc.C
     circuit.rxx(qubit_1, qubit_2, theta=theta[2, 0])
     circuit.ryy(qubit_1, qubit_2, theta=theta[2, 1])
     circuit.rzz(qubit_1, qubit_2, theta=theta[2, 2])
-    #circuit.rx(qubit_1, theta=theta[3, 0])
-    #circuit.ry(qubit_1, theta=theta[3, 1])
-    #circuit.rz(qubit_1, theta=theta[3, 2])
-    #circuit.rx(qubit_2, theta=theta[4, 0])
-    #circuit.ry(qubit_2, theta=theta[4, 1])
-    #circuit.rz(qubit_2, theta=theta[4, 2])
+    circuit.rx(qubit_1, theta=theta[3, 0])
+    circuit.ry(qubit_1, theta=theta[3, 1])
+    circuit.rz(qubit_1, theta=theta[3, 2])
+    circuit.rx(qubit_2, theta=theta[4, 0])
+    circuit.ry(qubit_2, theta=theta[4, 1])
+    circuit.rz(qubit_2, theta=theta[4, 2])
     return circuit
 
 
@@ -75,9 +75,44 @@ def unitary_block(circuit: tc.Circuit, n_bits:int, theta: jax.Array) -> tc.Circu
         su4(circuit, i, i + 1, theta[i])
     return circuit
 
-
-
 def unitary_vqe_circuit(params: jax.Array, n_bits: int) -> tc.Circuit:
+    """
+    Create a VQE circuit with a unitary block applied to the first n_bits qubits.
+
+    Args:
+        n_bits (int): The number of bits (qubits) in the circuit.
+        params
+
+    Returns:
+        tc.Circuit: The quantum circuit with the unitary block applied.
+    """
+    p0_shape = (n_bits - 1, 5, 3)
+    p0_size = math.prod(p0_shape)
+
+    p1_shape = (n_bits, 3)
+
+    # Slice the flat vector
+    p0_flat = params[:p0_size]
+    p1_flat = params[p0_size:]
+
+    # Reshape and return
+    p0 = p0_flat.reshape(p0_shape)
+    p1 = p1_flat.reshape(p1_shape)
+
+    circuit = tc.Circuit(n_bits)
+    for i in range(n_bits):
+        circuit.h(i)
+    unitary_block(circuit, n_bits, p0)
+
+    # Apply a final layer of rotations to all qubits
+    for i in range(n_bits):
+        circuit.rx(i, theta=p1[i, 0])
+        circuit.ry(i, theta=p1[i, 1])
+        circuit.rz(i, theta=p1[i, 2])
+
+    return circuit
+
+def unitary_vqe_circuit_depth2(params: jax.Array, n_bits: int) -> tc.Circuit:
     """
     Create a VQE circuit with a unitary block applied to the first n_bits qubits.
 
@@ -107,6 +142,7 @@ def unitary_vqe_circuit(params: jax.Array, n_bits: int) -> tc.Circuit:
     for i in range(n_bits):
         circuit.h(i)
     unitary_block(circuit, n_bits, p0)
+    unitary_block(circuit, n_bits, p1)
 
     # Apply a final layer of rotations to all qubits
     for i in range(n_bits):
@@ -122,7 +158,7 @@ def init_unitary_vqe_param(n_bits:int, randkey: Any) -> jax.Array:
 
     p1_shape = (n_bits, 3)
     p1_size = jnp.prod(jnp.array(p1_shape))
-    total_params = int(2 * p0_size + p1_size)
+    total_params = int(p0_size + p1_size)
     return jax.random.uniform(randkey, shape=(total_params,), minval=-jnp.pi, maxval=jnp.pi)
 
 def long_range_block(n_bits: int, thetas: jax.Array, max_stride: int | None = None) -> tc.Circuit:
@@ -183,6 +219,29 @@ def ancilla_prep(circuit:tc.Circuit, theta: jax.Array, target_1:int, target_2:in
 
     # ── second half (acts on data-1 & ancilla) ─────────────────────────────
     su4(circuit, target_2, ancilla, theta[1])
+
+    return circuit
+
+def new_syndrome_circuit(n_qubits: int, ancilla_params: jax.Array) -> tc.Circuit:
+    """
+    Prepare a syndrome circuit for `n_bits` data qubits, using `n_bits-1` ancilla.
+
+    Args:
+        n_qubits (int): The number of data qubits (n_bits data + n_bits ancilla).
+        ancilla_params (jax.Array): A 2D array of shape (n_bits-1, 2, 5, 3) containing the parameters for the ancilla preparation.
+    Returns:
+        tc.Circuit: The quantum circuit with the syndrome preparation applied.
+    """
+    circuit = tc.Circuit(2 * n_qubits)
+    ancilla_params = ancilla_params.reshape((n_qubits - 1, 2, 5, 3))
+    p0 = ancilla_params[:, 0, :, :].reshape((n_qubits - 1, 5, 3))
+    p1 = ancilla_params[:, 1, :, :].reshape((n_qubits - 1, 5, 3))
+    for i in range(n_qubits):
+        circuit.h(i)
+    unitary_block(circuit, n_qubits, p0)
+    for i in range(n_qubits - 1):
+        circuit.cx(i, n_qubits + i)
+        circuit.cx(i + 1, n_qubits + i)
 
     return circuit
 
