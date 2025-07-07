@@ -14,7 +14,7 @@ class SimpleNet(nn.Module):
     @nn.compact
     def __call__(self, x):
         # first projection to n_bits
-        out = nn.Dense(features=3 * self.n_bits)(x)
+        out = nn.Dense(features=6 * self.n_bits)(x)
 
         # two hidden layers
         x = nn.Dense(features=20 * self.n_bits)(x)
@@ -23,7 +23,7 @@ class SimpleNet(nn.Module):
         x = nn.relu(x)
 
         # back to n_bits and add residual
-        x = nn.Dense(features=3 * self.n_bits)(x)
+        x = nn.Dense(features=6 * self.n_bits)(x)
         x = x + out
 
         # final nonlinearity

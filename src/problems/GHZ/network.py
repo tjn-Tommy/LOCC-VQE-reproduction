@@ -54,6 +54,50 @@ def su4(circuit: tc.Circuit, qubit_1:int, qubit_2:int, theta: jax.Array) -> tc.C
     circuit.rz(qubit_2, theta=theta[4, 2])
     return circuit
 
+def su4_reduced(circuit: tc.Circuit, qubit_1:int, qubit_2:int, theta: jax.Array) -> tc.Circuit:
+    """
+    Apply a reduced SU(4) gate to two qubits with parameters theta.
+
+    Args:
+        circuit (tc.Circuit): The quantum circuit to which the gate will be applied.
+        qubit_1 (int): The first qubit index.
+        qubit_2 (int): The second qubit index.
+        theta (jax.Array): A 2D array of shape (2, 3) containing the parameters for the gate.
+
+    Returns:
+        tc.Circuit: The updated quantum circuit with the reduced SU(4) gate applied.
+    """
+    circuit.rx(qubit_1, theta=theta[0])
+    circuit.ry(qubit_1, theta=theta[1])
+    circuit.rz(qubit_1, theta=theta[2])
+    circuit.rx(qubit_2, theta=theta[0])
+    circuit.ry(qubit_2, theta=theta[1])
+    circuit.rz(qubit_2, theta=theta[2])
+    circuit.rxx(qubit_1, qubit_2, theta=theta[3])
+    circuit.ryy(qubit_1, qubit_2, theta=theta[4])
+    circuit.rzz(qubit_1, qubit_2, theta=theta[5])
+    circuit.rx(qubit_1, theta=theta[0])
+    circuit.ry(qubit_1, theta=theta[1])
+    circuit.rz(qubit_1, theta=theta[2])
+    circuit.rx(qubit_2, theta=theta[0])
+    circuit.ry(qubit_2, theta=theta[1])
+    circuit.rz(qubit_2, theta=theta[2])
+    return circuit
+
+def ZZ_measurement(circuit: tc.Circuit, qubit_1:int, qubit_2:int, theta: jax.Array):
+    circuit.ry(qubit_1, theta=jnp.pi / 2)
+    circuit.rxx(qubit_1, qubit_2, theta=theta[0])
+    circuit.rx(qubit_1, theta=theta[1])
+    circuit.rx(qubit_2, theta=theta[2])
+    circuit.ryy(qubit_1, qubit_2, theta=theta[3])
+    circuit.ry(qubit_1, theta=theta[4])
+    circuit.ry(qubit_2, theta=theta[5])
+    circuit.rzz(qubit_1, qubit_2, theta=theta[6])
+    circuit.rz(qubit_1, theta=theta[7])
+    circuit.rz(qubit_2, theta=theta[8])
+    circuit.ry(qubit_1, theta=-jnp.pi / 2)
+    circuit.barrier_instruction()
+    return circuit
 
 # ----------------------------------Unitary VQE Circuit----------------------------------
 def unitary_block(circuit: tc.Circuit, n_bits:int, theta: jax.Array) -> tc.Circuit:
@@ -198,8 +242,8 @@ def long_range_block(n_bits: int, thetas: jax.Array, max_stride: int | None = No
 
     return circuit
 
+# ----------------------------------LOCC-VQE Circuit (Sampling)----------------------------------
 
-# ----------------------------------LOCC-VQE Circuit----------------------------------
 def ancilla_prep(circuit:tc.Circuit, theta: jax.Array, target_1:int, target_2:int, ancilla:int) -> tc.Circuit:
     """
     Prepare an ancilla state using a SU(4) gate on two target qubits and an ancilla qubit.
@@ -222,6 +266,85 @@ def ancilla_prep(circuit:tc.Circuit, theta: jax.Array, target_1:int, target_2:in
 
     return circuit
 
+def ancilla_prep_reduced(circuit:tc.Circuit, theta: jax.Array, target_1:int, target_2:int, ancilla:int) -> tc.Circuit:
+    """
+    Prepare an ancilla state using a reduced SU(4) gate on two target qubits and an ancilla qubit.
+
+    Args:
+        circuit (tc.Circuit): The quantum circuit to which the gate will be applied.
+        theta (jax.Array): A 2D array of shape (2, 3) containing the parameters for the reduced SU(4) gates.
+        target_1 (int): The first target qubit index.
+        target_2 (int): The second target qubit index.
+        ancilla (int): The ancilla qubit index.
+    Returns:
+        tc.Circuit: The updated quantum circuit with the ancilla preparation applied.
+    """
+    su4_reduced(circuit, target_1, ancilla, theta[0])
+    su4_reduced(circuit, target_2, ancilla, theta[1])
+    return circuit
+
+def ancilla_prep_paper(circuit:tc.Circuit, theta: jax.Array, target_1:int, target_2:int, ancilla:int) -> tc.Circuit:
+    """
+    Prepare an ancilla state using a SU(4) gate on two target qubits and an ancilla qubit.
+
+    Args:
+        circuit (tc.Circuit): The quantum circuit to which the gate will be applied.
+        theta (jax.Array): A 2D array of shape (2, 5, 3) containing the parameters for the SU(4) gates.
+        target_1 (int): The first target qubit index.
+        target_2 (int): The second target qubit index.
+        ancilla (int): The ancilla qubit index.
+    Returns:
+        tc.Circuit: The updated quantum circuit with the ancilla preparation applied.
+    """
+
+    # ── first half (acts on data-0 & ancilla) ───────────────────────────────
+    ZZ_measurement(circuit, target_1, ancilla, theta[0])
+
+    # ── second half (acts on data-1 & ancilla) ─────────────────────────────
+    ZZ_measurement(circuit, target_2, ancilla, theta[1])
+
+    return circuit
+
+def syndrome_circuit_reduced(circuit:tc.Circuit, n_qubits:int, ancilla_params: jax.Array) -> tc.Circuit:
+    """
+    Prepare a syndrome circuit for `n_bits` data qubits, using `n_bits-1` ancilla.
+
+    Args:
+        circuit (tc.Circuit): The quantum circuit to which the syndrome preparation will be applied.
+        ancilla_params (jax.Array): A 2D array of shape (n_bits-1, 2, 3) containing the parameters for the ancilla preparation.
+        n_qubits (int): The number of data qubits (n_bits data + n_bits ancilla).
+    Returns:
+        tc.Circuit: The updated quantum circuit with the syndrome preparation applied.
+    """
+    ancilla_params = ancilla_params.reshape((n_qubits - 1, 2, 6))
+    for i in range(n_qubits):
+        circuit.h(i)
+
+    for i in range(n_qubits - 1):
+        ancilla_prep_reduced(circuit, ancilla_params[i], i, i + 1, n_qubits + i)
+    return circuit
+
+def syndrome_circuit_paper(circuit:tc.Circuit, n_qubits:int, ancilla_params: jax.Array) -> tc.Circuit:
+    """
+    Prepare a syndrome circuit for `n_bits` data qubits, using `n_bits-1` ancilla.
+
+    Args:
+        circuit (tc.Circuit): The quantum circuit to which the syndrome preparation will be applied.
+        ancilla_params (jax.Array): A 2D array of shape (n_bits-1, 2, 3) containing the parameters for the ancilla preparation.
+        n_qubits (int): The number of data qubits (n_bits data + n_bits ancilla).
+    Returns:
+        tc.Circuit: The updated quantum circuit with the syndrome preparation applied.
+    """
+    ancilla_params = ancilla_params.reshape((n_qubits - 1, 2, 9))
+    for i in range(n_qubits):
+        circuit.h(i)
+
+    for i in range(n_qubits - 1):
+        ancilla_prep_paper(circuit, ancilla_params[i], i, i + 1, n_qubits + i)
+    return circuit
+
+# ----------------------------------Sample Circuit----------------------------------
+
 def new_syndrome_circuit(n_qubits: int, ancilla_params: jax.Array) -> tc.Circuit:
     """
     Prepare a syndrome circuit for `n_bits` data qubits, using `n_bits-1` ancilla.
@@ -240,9 +363,10 @@ def new_syndrome_circuit(n_qubits: int, ancilla_params: jax.Array) -> tc.Circuit
         circuit.h(i)
     unitary_block(circuit, n_qubits, p0)
     for i in range(n_qubits - 1):
-        circuit.cx(i, n_qubits + i)
-        circuit.cx(i + 1, n_qubits + i)
-
+        circuit.crx(i, n_qubits + i, theta=p1[i, 0, 0])
+        circuit.cry(i, n_qubits + i, theta=p1[i, 0, 1])
+        circuit.crx(1 + i, i + n_qubits, theta=p1[i, 1, 0])
+        circuit.cry(1 + i, i + n_qubits, theta=p1[i, 1, 1])
     return circuit
 
 def syndrome_circuit(circuit:tc.Circuit, n_qubits:int, ancilla_params: jax.Array) -> tc.Circuit:
@@ -290,9 +414,13 @@ def post_sample_correction(circuit: tc.Circuit, n_bits: int, p0: jax.Array) -> t
     Returns:
         tc.Circuit: The updated quantum circuit with the correction applied.
     """
-    p0 = p0.reshape((n_bits, 3))
+    p0 = p0.reshape((n_bits, 2, 3))
+    for i in range(n_bits - 1):
+        circuit.rxx(i, i+1, theta=p0[i, 0, 0])
+        circuit.ryy(i, i+1, theta=p0[i, 0, 1])
+        circuit.rzz(i, i+1, theta=p0[i, 0, 2])
     for i in range(n_bits):
-        su2(circuit, i, p0[i])
+        su2(circuit, i, p0[i, 1])
     return circuit
 
 def syndrome_circuit_wrapper(n_bits: int, p0: jax.Array) -> tc.Circuit:
@@ -327,48 +455,108 @@ def post_sample_correction_wrapper(n_bits: int, p0: jax.Array) -> tc.Circuit:
     post_sample_correction(circuit, n_bits, p0)
     return circuit
 
-def correction_circuit(n_bits: int, circuit: tc.Circuit, p1: jax.Array, p2: jax.Array, p3: jax.Array) -> tc.Circuit:
-    """
-    Three-shell recovery circuit, faithfully mirroring the TensorCircuit
-    version (binary-tree fan-out  ➜  dense ancilla→data layer  ➜  per-qubit clean-up).
 
-    Arg:
-        n_bits (int): Number of data qubits (n_bits data + n_bits ancilla).
-        param_1 (np.Array): Parameters for the first shell of the correction circuit. Shape: (log2(n_bits), n_bits//2, 3).
-        param_2 (np.Array): Parameters for the second shell of the correction circuit. Shape: (n_bits, n_bits, 2).
-        param_3 (np.Array): Parameters for the third shell of the correction circuit. Shape: (n_bits, 3).
-    """
 
-    # ---- shell 1: binary-tree fan-out over ancilla -----------------------
-    m = int(math.log2(n_bits))
+def correction_circuit_qsim(n, corr_circuit, params_corr_1, params_corr_2, params_corr_3):
+    m = int(math.log2(n))  # number of layers in the binary tree
     for i in range(m):
         count = 0
-        for j in range(0, n_bits, 2 ** (i + 1)):
+        for j in range(1, n, 2 ** (i + 1)):
             for k in range(2 ** i):
-                circuit.ry(n_bits + j, jnp.pi / 2)
-                circuit.rxx(n_bits + j, n_bits + j + k + 2 ** i - 1, p1[i][count][0])
-                circuit.rx(n_bits + j, p1[i][count][1])
-                circuit.rx(n_bits + j + k + 2 ** i - 1, p1[i][count][2])
-                circuit.ry(n_bits + j, -jnp.pi / 2)
-                count += 1
-            # feed-forward CNOT in the fan-out tree
-            if j + 2 ** i < n_bits:
-                circuit.cnot(n_bits + j + 2 ** i, n_bits + j)
+                corr_circuit.ry(n + j, theta=jnp.pi / 2)
+                corr_circuit.rxx(n + j, j + k + 2 ** i - 1, theta=params_corr_1[i][count][0])
+                corr_circuit.rx(j + k + 2 ** i - 1, theta=params_corr_1[i][count][1])
+                corr_circuit.ry(n + j, theta=-jnp.pi / 2)
+            if j + 2 ** i < n:
+                corr_circuit.cnot(n + j + 2 ** i, n + j)
+            count = count + 1
 
-    # ---- shell 2: all-to-all ancilla→data layer ---------------------------
-    for anc in range(n_bits):
-        for data in range(n_bits):
-            circuit.ry(n_bits + anc, jnp.pi / 2)
-            circuit.rxx(n_bits + anc, data, p2[anc][data][0])
-            circuit.rx(n_bits + anc, p2[anc][data][1])
-            circuit.ry(n_bits + anc, -jnp.pi / 2)
+    for i in range(n):
+        for j in range(n):
+            corr_circuit.ry(n + i, theta=jnp.pi / 2)
+            corr_circuit.rxx(n + i, j, theta=params_corr_2[i][j][0])
+            corr_circuit.rx(j, theta=params_corr_2[i][j][1])  # previous mistakenly writen i instead of j here!!!
+            corr_circuit.ry(n + i, theta=-jnp.pi / 2)
 
-    # ---- shell 3: per-data-qubit clean-up --------------------------------
-    for q in range(n_bits):
-        circuit.rx(q, p3[q][0])
-        circuit.ry(q, p3[q][1])
-        circuit.rz(q, p3[q][2])
+    for i in range(n):
+        corr_circuit.rx(i, theta=params_corr_3[i][0])
+        corr_circuit.ry(i, theta=params_corr_3[i][1])
+        corr_circuit.rz(i, theta=params_corr_3[i][2])
+    return corr_circuit
+
+def reshape_params(flat: jnp.ndarray, n: int):
+    """Slice flat→(p0,p1,p2,p3) with the same shapes you used in Qiskit."""
+    # shapes
+    shape0 = (n - 1, 2, 6)
+    shape1 = (int(math.log2(n)), n // 2, 3)
+    shape2 = (n, n, 2)
+    shape3 = (n, 3)
+    # sizes
+    s0 = math.prod(shape0)
+    s1 = math.prod(shape1)
+    s2 = math.prod(shape2)
+    # slices
+    p0 = flat[:s0].reshape(shape0)
+    p1 = flat[s0 : s0 + s1].reshape(shape1)
+    p2 = flat[s0 + s1 : s0 + s1 + s2].reshape(shape2)
+    p3 = flat[s0 + s1 + s2 :].reshape(shape3)
+    return p0, p1, p2, p3
+
+
+
+def init_reduced_syndrome_correction_parameters(n_bits: int, randkey: Any) -> jax.Array:
+    """
+    Initialize the parameters for the reduced syndrome correction circuit.
+
+    Args:
+        n_bits (int): The number of bits (qubits) in the circuit.
+        randkey (Any): A JAX random key for parameter initialization.
+
+    Returns:
+        jax.Array: A 1D array of shape (n_bits * 3 + (n_bits - 1) * 30) containing the initialized parameters for the correction circuit.
+    """
+    p0_shape = (n_bits - 1, 2, 9)
+    p0_size = math.prod(p0_shape)
+
+    p1_shape = (int(math.log2(n_bits)), n_bits // 2, 3)
+    p1_size = math.prod(p1_shape)
+
+    p2_shape = (n_bits, n_bits, 2)
+    p2_size = math.prod(p2_shape)
+
+    p3_shape = (n_bits, 3)
+    p3_size = math.prod(p3_shape)
+
+    total_params = int(p0_size + p1_size + p2_size + p3_size)
+    return jax.random.uniform(randkey, shape=(total_params,), minval=-jnp.pi, maxval=jnp.pi)
+
+def reshape_params_paper(flat: jnp.ndarray, n: int):
+    """Slice flat→(p0,p1,p2,p3) with the same shapes you used in Qiskit."""
+    # shapes
+    shape0 = (n - 1, 2, 9)
+    shape1 = (int(math.log2(n)), n // 2, 3)
+    shape2 = (n, n, 2)
+    shape3 = (n, 3)
+    # sizes
+    s0 = math.prod(shape0)
+    s1 = math.prod(shape1)
+    s2 = math.prod(shape2)
+    # slices
+    p0 = flat[:s0].reshape(shape0)
+    p1 = flat[s0 : s0 + s1].reshape(shape1)
+    p2 = flat[s0 + s1 : s0 + s1 + s2].reshape(shape2)
+    p3 = flat[s0 + s1 + s2 :].reshape(shape3)
+    return p0, p1, p2, p3
+
+def paper_syndrome_circuit(params, n_bits):
+    # Extract parameters for the syndrome circuit
+    p0, p1, p2, p3 = reshape_params_paper(params, n_bits)
+    # Create the circuit
+    circuit = tc.Circuit(2 * n_bits)
+    # Apply the reduced syndrome circuit
+    syndrome_circuit_paper(circuit, n_bits, p0)
+    # Apply the correction circuit
+    correction_circuit_qsim(n_bits, circuit, p1, p2, p3)
+
     return circuit
-
-
 

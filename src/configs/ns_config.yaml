@@ -1,7 +1,7 @@
 # Configuration for the VQE experiment
 
 experiment_setup:
-  name: "GHZ_UVQE_Experiment"
+  name: "GHZ_NonSampling_VQE_Experiment"
   num_runs: 16
   sample_rounds: 128
   seed: 42

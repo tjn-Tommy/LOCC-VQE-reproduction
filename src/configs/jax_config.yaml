@@ -2,8 +2,8 @@
 
 experiment_setup:
   name: "GHZ_VQE_Experiment"
-  num_runs: 4
-  theta1_sample_rounds: 8
+  num_runs: 16
+  theta1_sample_rounds: 16
   gamma_sample_rounds: 2
   energy_sample_rounds: 32
   seed: 42
@@ -19,8 +19,8 @@ quantum_model:
 
 optimizer_params:
   name: "Adam"
-  lr_theta1: 1.5e-2    # learning-rate for θ₁  (syndrome angles)
-  lr_gamma: 6e-4      # learning-rate for γ   (MLP weights)
+  lr_theta1: 1e-2    # learning-rate for θ₁  (syndrome angles)
+  lr_gamma: 7e-3      # learning-rate for γ   (MLP weights)
   iterations: 10
   decay:
     type: exponential      # 'exponential' | 'cosine' | 'none'
